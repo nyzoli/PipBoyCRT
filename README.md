@@ -48,7 +48,7 @@ access for desktop apps in Settings › Privacy & security › Location.
 It is meant to run inside
 [cool-retro-term-windows](https://github.com/pushingpandas/cool-retro-term-windows),
 which provides the CRT look; the app itself only uses the 16 ANSI colors, so any
-terminal theme applies.
+terminal theme applies. See [Getting started](#getting-started) for the setup.
 
 ## Gallery
 
@@ -59,15 +59,72 @@ terminal theme applies.
 | ![The quest timer's radiation alarm](docs/img/timer.jpg) | ![ART — ANSI art from the 16colo.rs archive](docs/img/art.jpg) |
 
 
-## Download
+## Getting started
 
-Grab the latest `pipboy-windows-x64.zip` from the
-[Releases page](https://github.com/nyzoli/PipBoyCRT/releases/latest) — it holds
-`pipboy.exe`, a sample `config.toml` and the `vault` folder. Unzip it anywhere,
-edit `config.toml` (your city for WEATHER, your music folder, …) and start
-`pipboy.exe` inside cool-retro-term. Every release is built by GitHub Actions
-on a clean Windows runner with the standard MSVC toolchain; no installer, no
-telemetry, nothing outside the folder except what you point it at.
+### What you need
+
+- **Windows 10 or 11, x64.** Nothing is installed; the app is one folder.
+- **[cool-retro-term-windows](https://github.com/pushingpandas/cool-retro-term-windows)**
+  — the CRT look comes from the terminal, not from the app. Any terminal works
+  (Windows Terminal included), but this is the one it was made for.
+- **Optional, per tab:** an internet connection (WEATHER, RADIO, NEWS, ART,
+  GLOBE, SPEEDTEST), the [Himalaya](https://github.com/pimalaya/himalaya) CLI
+  for MAIL, a music folder for MUSIC, the `claude` CLI if you want it in TERM.
+  Every tab without its source just says so; nothing crashes, and you can
+  switch any tab off on the SETUP tab.
+
+### Install
+
+1. Download `pipboy-windows-x64.zip` from the
+   [Releases page](https://github.com/nyzoli/PipBoyCRT/releases/latest).
+2. Unzip it anywhere — say `C:\Tools\PipBoyCRT\`. It contains `pipboy.exe`, a
+   sample `config.toml` and the `vault` folder (the persona for `claude` in TERM).
+3. Open `config.toml` in any editor and set at least `[weather] name / lat / lon`
+   to your city. Everything else has a working default.
+
+### Windows Defender may stop it
+
+The exe is not code-signed (that costs money and a company; this is a hobby
+project), so the first start can trigger **SmartScreen** ("Windows protected
+your PC" → *More info* → *Run anyway*) or, on machines with stricter
+**Defender ASR rules**, a silent block or a "Failed to run" message. Nothing is
+wrong with the file: every release is built by GitHub Actions on a clean
+Windows runner from the source you can read here, with the standard MSVC
+toolchain, and the zip's SHA-256 is shown on the release page. If Defender
+keeps quarantining it, add the folder as an exclusion (Windows Security →
+Virus & threat protection → Exclusions) or build it yourself with
+`cargo build --release` — the result is byte-for-byte the same program.
+
+### Run it in cool-retro-term
+
+1. Start cool-retro-term-windows first and pick a profile: **Profiles → Deep
+   Blue** is what the screenshots use (Monochrome Green and Default Amber look
+   just as good; the app only uses the 16 ANSI colors, so every theme works).
+2. In **Settings → Terminal** set **Line Spacing to 0 %** — the ART tab and the
+   block fonts of CLOCK and WEATHER are drawn with block characters that must
+   touch; with a gap they fall apart. The screenshots use the bundled
+   *BigBlue Terminal* font at 85 % scaling.
+3. Give the window room: 80×24 is the minimum for every tab, 120×40 or more
+   shows everything at once. At full screen the OVERVIEW is a proper wall panel.
+4. In the terminal, go to the folder and start the app:
+
+   ```powershell
+   cd C:\Tools\PipBoyCRT
+   .\pipboy.exe
+   ```
+
+### What to expect
+
+- The first frame is up in well under a second; the tabs fill in as their
+  sources answer (weather and news in a few seconds, MAIL when Himalaya
+  replies). Radio streams start on `Space` or `Enter`.
+- It uses almost no CPU while idle (4 frames per second) and speeds up to 20
+  only on tabs that move — the radio's VU meter, a running speed test, an
+  animation in ART, the terminal in TERM.
+- It writes only next to itself: `config.toml` (the SETUP tab updates the
+  `[shell] disabled` list), `notes.md` (NOTES and the radio's favourite tracks)
+  and `speedtest.log`. No registry, no `%APPDATA%`, no telemetry.
+- `q` or `Ctrl+C` quits; `Esc` never does — inside a tab it means "back".
 
 ## Build
 
