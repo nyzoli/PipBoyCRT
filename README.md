@@ -298,21 +298,36 @@ scan has recorded a baseline — a MAC that has never been here before is
 flagged `NEW` (plus a `☢ new` badge in the header and one footer line, until
 you look at the tab); that very first scan instead prints one footer line
 (`wasteland: first scan — N devices recorded as known`) and flags nothing, so
-an empty memory does not paint the whole network `NEW`. Names come from
-reverse DNS, with a small built-in OUI table as the fallback, and `n` renames
-a device for good. `Enter` opens the details, where `p` pings it once, and
-below 80 columns the list keeps IP, NAME and SEEN only.
+an empty memory does not paint the whole network `NEW`. `Enter` opens the
+details, where `p` pings it once, and below 80 columns the list keeps IP, NAME
+and SEEN only.
+
+**Where the names come from.** Home routers seldom answer reverse DNS for
+their own clients, so a device is asked three ways, in order: reverse DNS
+(whatever resolver Windows is configured to use), then **mDNS** — a PTR
+question for the address, sent to the device itself on UDP 5353 and once per
+scan to the `224.0.0.251` group, which is what names Apple gear, printers,
+Sonos, Chromecast, ESP boards and most Linux boxes — then **NetBIOS**, a node
+status request on UDP 137 that hands back the computer name of Windows PCs,
+Samba shares and NAS boxes. Both of those are single local UDP datagrams to
+the device itself; nothing about them leaves the subnet. Whatever is left
+unnamed falls back to the MAC vendor from the IEEE OUI registry (about 40 000
+prefixes, generated into the binary by `tools/gen_oui.py` — re-run it to
+refresh the list). The detail view says which of them produced the name
+(`name pi-hole · via mDNS`), and `n` always wins: a rename you type is kept
+for good and is never overwritten by a lookup. Each answer — and each silence
+— is remembered for an hour, so a device that says nothing is not re-probed
+every minute.
 
 Devices are remembered in `wasteland.json` next to the executable (MAC → name,
 first and last seen, last local IP), written atomically through a `.tmp` file;
 a corrupt file is never fatal, the tab starts a fresh memory and says so in
 the footer. A device that stops answering stays listed, dimmed, for seven days
 before it is forgotten. No connection is ever made outside the subnet — the
-ping sweep and the neighbour table are purely local — but reverse-DNS lookups
-are the exception: they go out to whatever resolver Windows is configured to
-use, so a public resolver sees the `in-addr.arpa` queries for your local
-addresses. Each answer (or non-answer) is cached for an hour, so a device is
-looked up again only that often.
+ping sweep, the neighbour table and the mDNS and NetBIOS probes are all purely
+local — but reverse-DNS lookups are the exception: they go out to whatever
+resolver Windows is configured to use, so a public resolver sees the
+`in-addr.arpa` queries for your local addresses.
 
 By default the tab also runs a **ping sweep** on its first scan and every
 fifth one after that — one ICMP echo to each of the 254 addresses of the /24,
