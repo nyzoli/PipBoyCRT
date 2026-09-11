@@ -25,7 +25,7 @@ icy-metadata = { version = "0.6", default-features = false, features = ["reqwest
 # MUSIC: .m4a needs the mp4 container (symphonia-isomp4), .wav needs the pcm codec.
 rodio = { version = "0.22", default-features = false, features = ["playback", "symphonia-mp3", "symphonia-aac", "symphonia-isomp4", "symphonia-flac", "symphonia-wav", "symphonia-pcm"] }
 chrono-tz = "0.10"
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_NetworkManagement_WiFi", "Win32_Networking_WinSock", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_NetworkManagement_WiFi", "Win32_Networking_WinSock", "Win32_System_SystemInformation", "Win32_System_StationsAndDesktops", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 rustfft = "6"
 feed-rs = "2"
 edtui = { version = "0.11", default-features = false }

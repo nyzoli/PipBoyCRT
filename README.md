@@ -36,6 +36,7 @@ rather than operated.
 | **WIFI** | Networks in range with band, channel, dBm; channel congestion as bell curves; best channel per band; connect with a password prompt |
 | **WASTELAND** | Every device on your local network: who is home, who is asleep, who is new — name, vendor, MAC, last seen, with an optional ping sweep |
 | **CLOCK** | Big clock, world clocks, sun & moon, a quest timer that ends in a radiation alarm; `v` cycles a full-screen shadowed digital clock and a full-panel analog dial with a day/date window |
+| **DOSIMETER** | Screen time as a radiation dose: a RADS readout in block font, a 24-hour strip of the day, and a 45-on / 15-off rule that alerts with a Geiger burst when the dose goes critical |
 | **NEWS** | Hacker News front page plus your RSS/Atom feeds, with a reader view and on-demand article fetch |
 | **MAIL** | Your inbox through the Himalaya CLI: list, reader, unread count — read-only, credentials stay in Himalaya |
 | **NOTES** | Sticky notes in `notes.md` with a Notepad-like editor |
@@ -181,6 +182,8 @@ rustflags = ["-C", "linker-flavor=ld.lld", "-C", "link-self-contained=yes"]
 | `Enter` | CLOCK: start/pause timer |
 | `x` | CLOCK: reset timer |
 | `[` `]` | CLOCK: timer ±5 min |
+| `z` | DOSIMETER: snooze the dose alert for 5 minutes |
+| `r` | DOSIMETER: drop the running session |
 | `↑` `↓` | NEWS: select item |
 | `[` `]` | NEWS: previous / next source |
 | `Enter` | NEWS: read the item in the terminal; in the reader, fetch the article if it has no body (`Backspace` / `Esc` back) |
@@ -499,6 +502,15 @@ speedtest_history = 20   # SPEEDTEST results loaded from speedtest.log and shown
 zones = ["America/New_York", "Asia/Tokyo"]
 timer_minutes = 25
 view = "normal"   # starting view: "normal" / "digital" / "analog" (`v` cycles them)
+
+[dosimeter]
+work = 45         # minutes at the screen before the dose is critical
+rest = 15         # minutes of prescribed break
+idle = 3          # a gap this long (minutes) closes the session
+quiet = ["22:00-07:00"]     # no Geiger burst inside these windows
+watch_foreground = false    # per-app minutes today (memory only, never logged)
+rest_apps = ["vlc", "mpv"]  # foreground apps that count as rest even with input
+history = 30      # days of dosimeter.log kept for the 7-day sparkline
 
 [news]
 feeds = [
