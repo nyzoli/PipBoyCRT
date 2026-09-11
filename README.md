@@ -59,6 +59,16 @@ terminal theme applies.
 | ![The quest timer's radiation alarm](docs/img/timer.jpg) | ![ART — ANSI art from the 16colo.rs archive](docs/img/art.jpg) |
 
 
+## Download
+
+Grab the latest `pipboy-windows-x64.zip` from the
+[Releases page](https://github.com/nyzoli/PipBoyCRT/releases/latest) — it holds
+`pipboy.exe`, a sample `config.toml` and the `vault` folder. Unzip it anywhere,
+edit `config.toml` (your city for WEATHER, your music folder, …) and start
+`pipboy.exe` inside cool-retro-term. Every release is built by GitHub Actions
+on a clean Windows runner with the standard MSVC toolchain; no installer, no
+telemetry, nothing outside the folder except what you point it at.
+
 ## Build
 
 Prerequisites (the standard Rust-on-Windows setup):
