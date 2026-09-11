@@ -244,6 +244,91 @@ pub mod icmp {
 }
 use icmp::Pinger;
 
+/// Longest a single reverse lookup may take before it is given up on.
+const RDNS_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Reverse DNS for one address (v4 or v6), with a hard ceiling: `getnameinfo`
+/// has no timeout of its own, so it runs on a throwaway thread we simply stop
+/// waiting for. `None` = no PTR record, or it took too long.
+///
+/// Privacy: this asks whatever resolver Windows is configured to use, so the
+/// address being looked up leaves the machine. Nothing else does.
+pub fn reverse_dns(ip: std::net::IpAddr) -> Option<String> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(rdns::host_name(ip));
+    });
+    rx.recv_timeout(RDNS_TIMEOUT).ok().flatten()
+}
+
+mod rdns {
+    use std::net::IpAddr;
+    use windows_sys::Win32::Networking::WinSock::{
+        getnameinfo, WSAStartup, AF_INET, AF_INET6, NI_NAMEREQD, SOCKADDR, SOCKADDR_IN, SOCKADDR_IN6, WSADATA,
+    };
+
+    /// WinSock must be started before `getnameinfo`; once per process is enough
+    /// and there is nothing to clean up before exit.
+    fn winsock() -> bool {
+        use std::sync::OnceLock;
+        static READY: OnceLock<bool> = OnceLock::new();
+        *READY.get_or_init(|| {
+            let mut data: WSADATA = unsafe { std::mem::zeroed() };
+            unsafe { WSAStartup(0x0202, &mut data) == 0 }
+        })
+    }
+
+    /// `NI_NAMEREQD` means "a name or nothing", so an address is never echoed
+    /// back as its own host name.
+    pub fn host_name(ip: IpAddr) -> Option<String> {
+        if !winsock() {
+            return None;
+        }
+        let mut host = [0u8; 256];
+        let code = match ip {
+            IpAddr::V4(v4) => {
+                let mut sa: SOCKADDR_IN = unsafe { std::mem::zeroed() };
+                sa.sin_family = AF_INET;
+                // Network byte order, the same way `Pinger` hands an address over.
+                sa.sin_addr.S_un.S_addr = u32::from_ne_bytes(v4.octets());
+                unsafe {
+                    getnameinfo(
+                        std::ptr::from_ref(&sa).cast::<SOCKADDR>(),
+                        std::mem::size_of::<SOCKADDR_IN>() as i32,
+                        host.as_mut_ptr(),
+                        host.len() as u32,
+                        std::ptr::null_mut(),
+                        0,
+                        NI_NAMEREQD as i32,
+                    )
+                }
+            }
+            IpAddr::V6(v6) => {
+                let mut sa: SOCKADDR_IN6 = unsafe { std::mem::zeroed() };
+                sa.sin6_family = AF_INET6;
+                sa.sin6_addr.u.Byte = v6.octets();
+                unsafe {
+                    getnameinfo(
+                        std::ptr::from_ref(&sa).cast::<SOCKADDR>(),
+                        std::mem::size_of::<SOCKADDR_IN6>() as i32,
+                        host.as_mut_ptr(),
+                        host.len() as u32,
+                        std::ptr::null_mut(),
+                        0,
+                        NI_NAMEREQD as i32,
+                    )
+                }
+            }
+        };
+        if code != 0 {
+            return None;
+        }
+        let end = host.iter().position(|&b| b == 0).unwrap_or(host.len());
+        let name = String::from_utf8_lossy(&host[..end]).into_owned();
+        (!name.is_empty()).then_some(name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

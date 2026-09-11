@@ -35,6 +35,7 @@ rather than operated.
 | **NET** | Ping to the gateway and public resolvers with sparklines and loss, traceroute, a Cloudflare down/up SPEEDTEST with history |
 | **WIFI** | Networks in range with band, channel, dBm; channel congestion as bell curves; best channel per band; connect with a password prompt |
 | **WASTELAND** | Every device on your local network: who is home, who is asleep, who is new — name, vendor, MAC, last seen, with an optional ping sweep |
+| **COMMS** | Who your machine is talking to: every active connection grouped by process, with the remote address, its reverse-DNS name, the service behind the port, state, age and — when elevated — per-connection traffic |
 | **CLOCK** | Big clock, world clocks, sun & moon, a quest timer that ends in a radiation alarm; `v` cycles a full-screen shadowed digital clock and a full-panel analog dial with a day/date window |
 | **NEWS** | Hacker News front page plus your RSS/Atom feeds, with a reader view and on-demand article fetch |
 | **MAIL** | Your inbox through the Himalaya CLI: list, reader, unread count — read-only, credentials stay in Himalaya |
@@ -216,6 +217,12 @@ rustflags = ["-C", "linker-flavor=ld.lld", "-C", "link-self-contained=yes"]
 | `n` | WASTELAND: rename the selected device (`NAME>` prompt, `Esc` cancels) |
 | `s` | WASTELAND: ping sweep on/off for this session |
 | `r` | WASTELAND: rescan now |
+| `↑` `↓` | COMMS: select connection (`PgUp` `PgDn` page) |
+| `Enter` | COMMS: connection details (`Esc` / `Backspace` back) |
+| `s` | COMMS: sort by process / remote / traffic |
+| `f` | COMMS: filter (`FILTER>` prompt over process, address and name; `Esc` clears) |
+| `l` | COMMS: show/hide loopback connections for this session |
+| `r` | COMMS: re-read the connection table now |
 | `Enter` `i` | TERM: attach the keyboard to the embedded terminal (starts the process on the first attach) |
 | `F12` | TERM: release the keyboard back to the Pip-Boy (`[term] release_key`; one key, the same on every layout) |
 | `PgUp` `PgDn` | TERM: scroll the scrollback while not attached (`Shift+PgUp` / `Shift+PgDn` while attached) |
@@ -314,6 +321,40 @@ ARP table. A sweep is visible to anything watching the network (an IDS will
 see it, and so will the neighbours on a shared network), so turn it off with
 `sweep = false` in `config.toml`, or with `s` for the current session; without
 it the tab only sees the devices Windows has talked to lately.
+
+## COMMS
+
+**COMMS** answers one question: who is this machine talking to right now. It
+reads the Windows connection table — `GetExtendedTcpTable` for IPv4 and IPv6
+with the owning PID, plus `GetExtendedUdpTable` for bound UDP sockets — every
+`[comms] interval` seconds on its own thread, and lists the connections
+**grouped by the process that owns them**. Each row is the remote address, its
+reverse-DNS name (`LAN` / `public` when there is none), the service behind the
+port (`443 https`, `22 ssh`, `993 imaps`, `5353 mdns`, …), the TCP state, how
+long the connection has been up, and its traffic. `ESTABLISHED` rows are
+bright, the closing ones (`TIME_WAIT`, `CLOSE_WAIT`, the `FIN_WAIT`s) dimmed,
+and a connection that appeared in the last two cycles is highlighted. Listening
+TCP sockets and bound UDP sockets have no remote end, so they are not listed
+one by one — they are the `N listening` count in the title. `Enter` opens the
+details (both endpoints, state, pid and the full image path, first seen, byte
+counters), `s` cycles the sort (process / remote / traffic), `f` filters on
+process, address or name, `l` shows the loopback traffic that is hidden by
+default, and below 80 columns the list keeps PROC, REMOTE and PORT only.
+
+**Traffic needs an elevated Pip-Boy.** The per-connection byte counters come
+from TCP ESTATS (`SetPerTcpConnectionEStats` /`GetPerTcpConnectionEStats`),
+which Windows only hands to an administrator. Started normally, the tab says
+`traffic: run as administrator` in its title, the `↓` / `↑` columns show `—`,
+and everything else works exactly the same — the connection list itself needs
+no privileges at all. The counters are IPv4-only (that is the API ESTATS
+offers); IPv6 rows never show a rate.
+
+Nothing here leaves the machine except the reverse-DNS lookups: those go to
+whatever resolver Windows is configured to use, so that resolver sees an
+`in-addr.arpa` query for each remote address you are connected to. At most 32
+addresses are looked up per cycle, 8 at a time with a one second ceiling each,
+and every answer (or non-answer) is cached for an hour. Nothing is written to
+disk and nothing is logged.
 
 ## ART
 

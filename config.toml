@@ -236,3 +236,13 @@ levels = "warn"     # "error" = critical + error only, "warn" = with warnings
 interval = 60
 sweep = true
 subnet = ""         # e.g. "192.168.100.0/24"; empty = the gateway's /24
+
+# COMMS: the active connections of this machine, from the Windows TCP/UDP
+# connection table. interval is in seconds, minimum 1. Remote addresses are
+# resolved with reverse DNS (the only thing that leaves the machine here);
+# per-connection traffic comes from TCP ESTATS and needs an elevated
+# pipboy.exe — without it the traffic columns stay "—". show_loopback lists
+# the connections to 127.0.0.1 / ::1 as well (`l` toggles it for the session).
+[comms]
+interval = 3
+show_loopback = false
