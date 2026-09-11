@@ -14,3 +14,6 @@ pub mod syslog;
 pub mod term;
 pub mod weather;
 pub mod wifi;
+// Registered by the coordinator; the allow goes away with the registry line.
+#[allow(dead_code)]
+pub mod wasteland;

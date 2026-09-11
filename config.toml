@@ -225,3 +225,14 @@ hours = 24          # look back this many hours (1-168)
 max = 200           # most events per refresh (10-500)
 interval = 300
 levels = "warn"     # "error" = critical + error only, "warn" = with warnings
+
+# WASTELAND: the devices on the local network, from the Windows IPv4 neighbour
+# (ARP) table. interval is in seconds, minimum 20. The sweep pings every address
+# of the subnet (254 max) on the first scan and every fifth one after that, so
+# silent devices enter the ARP table — it is visible to anything watching the
+# network, so set sweep = false to keep the tab passive (`s` toggles it for the
+# session). Names are remembered in wasteland.json next to the executable.
+[wasteland]
+interval = 60
+sweep = true
+subnet = ""         # e.g. "192.168.100.0/24"; empty = the gateway's /24

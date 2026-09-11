@@ -210,7 +210,7 @@ fn ping_loop(target: usize, addr: String, tx: Sender<NetEvent>) {
 }
 
 // ---- ICMP echo a Windows iphlpapi-n át (nem kell admin, nem kell raw socket) ----
-mod icmp {
+pub mod icmp {
     use std::net::Ipv4Addr;
     use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::NetworkManagement::IpHelper::{IcmpCloseHandle, IcmpCreateFile, IcmpSendEcho, ICMP_ECHO_REPLY};

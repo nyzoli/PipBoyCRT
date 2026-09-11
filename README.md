@@ -34,6 +34,7 @@ rather than operated.
 | **MUSIC** | Your own music folder as a browser (mp3, aac/m4a, flac, wav), shuffle, VU; it and RADIO pause each other |
 | **NET** | Ping to the gateway and public resolvers with sparklines and loss, traceroute, a Cloudflare down/up SPEEDTEST with history |
 | **WIFI** | Networks in range with band, channel, dBm; channel congestion as bell curves; best channel per band; connect with a password prompt |
+| **WASTELAND** | Every device on your local network: who is home, who is asleep, who is new — name, vendor, MAC, last seen, with an optional ping sweep |
 | **CLOCK** | Big clock, world clocks, sun & moon, a quest timer that ends in a radiation alarm; `v` cycles a full-screen shadowed digital clock and a full-panel analog dial with a day/date window |
 | **NEWS** | Hacker News front page plus your RSS/Atom feeds, with a reader view and on-demand article fetch |
 | **MAIL** | Your inbox through the Himalaya CLI: list, reader, unread count — read-only, credentials stay in Himalaya |
@@ -209,6 +210,12 @@ rustflags = ["-C", "linker-flavor=ld.lld", "-C", "link-self-contained=yes"]
 | `b` | WIFI: switch band (2.4 / 5 / 6 GHz) |
 | `c` | WIFI: connect to the selected network (`PASSWORD>` prompt when secured) |
 | `r` | WIFI: rescan now |
+| `↑` `↓` | WASTELAND: select device (`PgUp` `PgDn` page) |
+| `Enter` | WASTELAND: device details (`Esc` / `Backspace` back) |
+| `p` | WASTELAND: ping the selected device once and show the round trip |
+| `n` | WASTELAND: rename the selected device (`NAME>` prompt, `Esc` cancels) |
+| `s` | WASTELAND: ping sweep on/off for this session |
+| `r` | WASTELAND: rescan now |
 | `Enter` `i` | TERM: attach the keyboard to the embedded terminal (starts the process on the first attach) |
 | `F12` | TERM: release the keyboard back to the Pip-Boy (`[term] release_key`; one key, the same on every layout) |
 | `PgUp` `PgDn` | TERM: scroll the scrollback while not attached (`Shift+PgUp` / `Shift+PgDn` while attached) |
@@ -272,6 +279,34 @@ WPA2-PSK / WPA3-SAE profile and is wiped from memory afterwards — it is never
 written to disk, a log or the status line. Windows only shows SSIDs to an app
 that may use location services, so if the list stays empty, allow location
 access for desktop apps in Settings › Privacy & security › Location.
+
+## WASTELAND
+
+**WASTELAND** is the map of your own network. It reads the Windows IPv4
+neighbour (ARP) table with `GetIpNetTable2`, keeps the entries that belong to
+your subnet — the gateway's /24 unless `[wasteland] subnet` says otherwise —
+and lists them with name, vendor, MAC and how long ago each one was last seen.
+The gateway is marked `⌂ gateway`, this machine `you`, and a MAC that has
+never been here before is flagged `NEW` (plus a `☢ new` badge in the header
+and one footer line, until you look at the tab). Names come from reverse DNS,
+with a small built-in OUI table as the fallback, and `n` renames a device for
+good. `Enter` opens the details, where `p` pings it once, and below 80 columns
+the list keeps IP, NAME and SEEN only.
+
+Devices are remembered in `wasteland.json` next to the executable (MAC → name,
+first and last seen, last local IP), written atomically through a `.tmp` file;
+a corrupt file is never fatal, the tab starts a fresh memory and says so in
+the footer. A device that stops answering stays listed, dimmed, for seven days
+before it is forgotten. Nothing leaves your LAN: no address outside the subnet
+is ever touched and nothing is uploaded anywhere.
+
+By default the tab also runs a **ping sweep** on its first scan and every
+fifth one after that — one ICMP echo to each of the 254 addresses of the /24,
+32 at a time — so devices that never talk to this machine still show up in the
+ARP table. A sweep is visible to anything watching the network (an IDS will
+see it, and so will the neighbours on a shared network), so turn it off with
+`sweep = false` in `config.toml`, or with `s` for the current session; without
+it the tab only sees the devices Windows has talked to lately.
 
 ## ART
 
@@ -490,6 +525,12 @@ shuffle = false   # `s` toggles it at runtime
 
 [wifi]
 interval = 15     # seconds between scans (minimum 5; `r` scans now)
+
+[wasteland]
+interval = 60     # seconds between scans (minimum 20; `r` rescans now)
+sweep = true      # ping every address of the subnet so silent devices show up;
+                  # visible on the network — `false` keeps the tab passive (`s` toggles it for the session)
+subnet = ""       # "192.168.100.0/24" overrides the subnet taken from the gateway
 
 [art]
 animations = ["parrot", "nyan", "donut", "dvd", "batman", "forrest", "knot", "coin", "playstation", "spidyswing"]
