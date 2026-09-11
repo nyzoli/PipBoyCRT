@@ -1,6 +1,6 @@
 # PipBoyCRT
 
-![The OVERVIEW tab of PipBoyCRT running in cool-retro-term](docs/img/overview.jpg)
+![PipBoyCRT — the GLOBE tab in cool-retro-term: a braille world map with the day/night terminator, your location and the ISS](docs/img/globe.jpg)
 
 A Fallout Pip-Boy style terminal dashboard for Windows, written in Rust with
 [ratatui](https://ratatui.rs). Fifteen tabs: **OVERVIEW** (everything at a glance:
@@ -49,6 +49,15 @@ It is meant to run inside
 [cool-retro-term-windows](https://github.com/pushingpandas/cool-retro-term-windows),
 which provides the CRT look; the app itself only uses the 16 ANSI colors, so any
 terminal theme applies.
+
+## Gallery
+
+| | |
+|---|---|
+| ![OVERVIEW — every module at a glance](docs/img/overview.jpg) | ![WEATHER — forecast, air quality, pollen, UV](docs/img/weather.jpg) |
+| ![STAT — CPU, memory, GPU, disks, network](docs/img/stat.jpg) | ![CLOCK — the full-panel analog dial](docs/img/clock-analog.jpg) |
+| ![The quest timer's radiation alarm](docs/img/timer.jpg) | ![ART — ANSI art from the 16colo.rs archive](docs/img/art.jpg) |
+
 
 ## Build
 
