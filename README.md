@@ -1,5 +1,7 @@
 # PipBoyCRT
 
+![The OVERVIEW tab of PipBoyCRT running in cool-retro-term](docs/img/overview.jpg)
+
 A Fallout Pip-Boy style terminal dashboard for Windows, written in Rust with
 [ratatui](https://ratatui.rs). Fifteen tabs: **OVERVIEW** (everything at a glance:
 compact stats, big clock, weather, radio, network, timer), **STAT** (CPU, memory,
