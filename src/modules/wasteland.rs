@@ -3,10 +3,11 @@
 //! The source is the Windows IPv4 neighbour (ARP) table, read with
 //! `GetIpNetTable2` on a background thread; an optional ICMP sweep of the local
 //! /24 (the [`Pinger`] NET already owns) makes silent hosts show up there in
-//! the first place. Nothing leaves the LAN: no lookup is made outside the
-//! subnet, and the only thing written to disk is `wasteland.json` next to the
-//! executable (MAC → name, first/last seen, last local IP) so a device that is
-//! asleep is still listed.
+//! the first place. No connection is made outside the subnet for the sweep or
+//! the neighbour table — reverse-DNS lookups are the exception, going out to
+//! whatever resolver Windows is configured to use. The only thing written to
+//! disk is `wasteland.json` next to the executable (MAC → name, first/last
+//! seen, last local IP) so a device that is asleep is still listed.
 //!
 //! Everything `unsafe` lives in the [`ffi`] module at the bottom: every return
 //! code is checked, the table the API allocates is released by a `Drop` guard
@@ -49,6 +50,9 @@ const MAX_HOSTS: usize = 254;
 /// Reverse-DNS lookups started per scan, and how long each one may take.
 const MAX_LOOKUPS: usize = 64;
 const DNS_TIMEOUT: Duration = Duration::from_secs(1);
+/// Lookup threads sharing the [`MAX_LOOKUPS`] work queue, so a scan with many
+/// cold addresses waits at most `MAX_LOOKUPS / DNS_PARALLEL * DNS_TIMEOUT`.
+const DNS_PARALLEL: usize = 8;
 /// How long a resolved (or unresolved) name is trusted before asking again.
 const DNS_TTL: Duration = Duration::from_secs(3600);
 /// A device that has not answered for longer than this drops off the list.
@@ -124,20 +128,32 @@ fn host_addrs(net: Ipv4Addr, bits: u8) -> Vec<Ipv4Addr> {
     (1..=hosts).map(|i| Ipv4Addr::from(base + i)).collect()
 }
 
-/// Is this neighbour worth showing? Multicast, the subnet broadcast, APIPA and
-/// entries without a real MAC are noise, and so is anything off the subnet.
+/// The broadcast address of `net` under a `bits`-long prefix.
+fn broadcast(net: Ipv4Addr, bits: u8) -> Ipv4Addr {
+    let mask: u32 = if bits == 0 { 0 } else { u32::MAX << (32 - bits.min(32)) };
+    Ipv4Addr::from(u32::from(net) | !mask)
+}
+
+/// Is this neighbour worth showing? Multicast, the subnet's own network and
+/// broadcast address, APIPA and entries without a real MAC are noise, and so
+/// is anything off the subnet. A host address merely ending in `.0` or `.255`
+/// is not noise on anything narrower than a /24 — only the network's own
+/// network/broadcast address is dropped.
 fn keep_entry(ip: Ipv4Addr, mac: &[u8], net: Ipv4Addr, bits: u8) -> bool {
     if mac.len() != 6 || mac.iter().all(|&b| b == 0) || mac.iter().all(|&b| b == 0xff) {
         return false;
     }
     let o = ip.octets();
-    if o[0] >= 224 || ip.is_broadcast() || o[3] == 255 || o[3] == 0 {
+    if o[0] >= 224 || ip.is_broadcast() {
         return false;
     }
     if o[0] == 169 && o[1] == 254 {
         return false;
     }
-    in_subnet(ip, net, bits)
+    if !in_subnet(ip, net, bits) {
+        return false;
+    }
+    ip != net && ip != broadcast(net, bits)
 }
 
 /// `aa-bb-cc-dd-ee-ff`, the spelling Windows itself uses.
@@ -266,6 +282,17 @@ fn is_new_mac(mem: &Memory, mac: &str) -> bool {
     !mem.contains_key(mac)
 }
 
+/// A MAC seen for the first time this cycle is flagged & announced as new —
+/// unless this is the baseline scan of an empty memory, when every device
+/// would otherwise be noise, not signal.
+fn note_if_new(mem: &Memory, session_new: &mut HashSet<String>, first_run: bool, mac: &str) -> bool {
+    if first_run || !is_new_mac(mem, mac) {
+        return false;
+    }
+    session_new.insert(mac.to_string());
+    true
+}
+
 /// A corrupt file is not fatal: the caller starts fresh and says so.
 fn parse_memory(s: &str) -> Option<Memory> {
     if s.trim().is_empty() {
@@ -283,8 +310,8 @@ fn render_memory(m: &Memory) -> String {
 fn save_memory(path: &Path, m: &Memory) -> std::io::Result<()> {
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, render_memory(m))?;
-    // Windows `rename` fails onto an existing file; remove first, ignore "not there".
-    let _ = std::fs::remove_file(path);
+    // On Windows `rename` already replaces an existing destination file, so
+    // there is no separate remove step to race a concurrent reader against.
     std::fs::rename(&tmp, path)
 }
 
@@ -330,6 +357,9 @@ struct Scan {
     at: Option<DateTime<Local>>,
     /// `"192.168.100.42 (Espressif)"` for every MAC seen for the first time.
     fresh: Vec<String>,
+    /// Set only on the scan that started from an empty memory: the device
+    /// count for the one-line "first scan" footer, instead of flagging NEW.
+    baseline: Option<usize>,
 }
 
 /// Online first, then numerically by address (`.9` before `.10`).
@@ -359,6 +389,9 @@ struct Worker {
     mem: Memory,
     sweep: bool,
     cycle: u64,
+    /// The memory file was missing or unreadable at startup: the first scan
+    /// is a baseline, not a flood of NEW devices.
+    first_run: bool,
     /// MACs first seen in this session.
     session_new: HashSet<String>,
     /// IP → (name, when looked up); `None` = asked and got nothing.
@@ -368,20 +401,29 @@ struct Worker {
 impl Worker {
     fn new(cfg: WastelandCfg, path: PathBuf, tx: &Sender<WlEvent>) -> Self {
         let sweep = cfg.sweep;
-        let mem = match std::fs::read_to_string(&path) {
+        let (mem, first_run) = match std::fs::read_to_string(&path) {
             Ok(s) => match parse_memory(&s) {
-                Some(m) => m,
+                Some(m) => (m, false),
                 None => {
                     let _ = tx.send(WlEvent::Note(format!(
                         "wasteland: {} unreadable — starting a fresh memory",
                         path.file_name().and_then(|s| s.to_str()).unwrap_or("wasteland.json")
                     )));
-                    Memory::new()
+                    (Memory::new(), true)
                 }
             },
-            Err(_) => Memory::new(),
+            Err(_) => (Memory::new(), true),
         };
-        Self { cfg, path, mem, sweep, cycle: 0, session_new: HashSet::new(), dns: HashMap::new() }
+        Self {
+            cfg,
+            path,
+            mem,
+            sweep,
+            cycle: 0,
+            first_run,
+            session_new: HashSet::new(),
+            dns: HashMap::new(),
+        }
     }
 
     /// The subnet to work on: the config wins, otherwise the gateway's /24.
@@ -393,42 +435,22 @@ impl Worker {
         Some((network(gw, 24), 24))
     }
 
-    /// Resolved name for `ip`, cached for [`DNS_TTL`]; `budget` bounds how many
-    /// lookups one scan may start.
-    fn resolve(&mut self, ip: Ipv4Addr, budget: &mut usize) -> Option<String> {
-        if let Some((name, at)) = self.dns.get(&ip) {
-            if at.elapsed() < DNS_TTL {
-                return name.clone();
-            }
-        }
-        if *budget == 0 {
-            return None;
-        }
-        *budget -= 1;
-        let name = reverse_dns(ip);
-        self.dns.insert(ip, (name.clone(), Instant::now()));
-        name
+    /// A cached name, only if it is still within [`DNS_TTL`] — never blocks.
+    fn cached(&self, ip: Ipv4Addr) -> Option<String> {
+        let (name, at) = self.dns.get(&ip)?;
+        (at.elapsed() < DNS_TTL).then(|| name.clone())?
     }
 
-    fn scan(&mut self) -> Scan {
-        let iface = run_ipconfig().and_then(|o| parse_ipconfig(&o));
-        let gateway = iface.as_ref().map(|i| i.gateway.clone());
-        let Some((net, bits)) = self.subnet(gateway.as_deref()) else {
-            return Scan {
-                subnet: "no subnet".to_string(),
-                at: Some(Local::now()),
-                ..Scan::default()
-            };
-        };
-        if self.sweep && self.cycle % SWEEP_EVERY == 0 {
-            sweep(net, bits);
-        }
-        self.cycle = self.cycle.wrapping_add(1);
-
+    /// Builds the device list from the live neighbour table plus memory,
+    /// using only already-known names (memory, OUI, cached DNS) — no lookup
+    /// blocks this pass, so it is cheap enough to send to the UI right away.
+    /// Returns the devices, the fresh-device labels, and every address that
+    /// still needs a reverse-DNS lookup.
+    fn build(&mut self, net: Ipv4Addr, bits: u8) -> (Vec<Device>, Vec<String>, Vec<Ipv4Addr>) {
         let now = Local::now().timestamp();
-        let mut budget = MAX_LOOKUPS;
         let mut devices = Vec::new();
         let mut fresh = Vec::new();
+        let mut pending = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
         for nb in ffi::neighbours() {
             if !keep_entry(nb.ip, &nb.mac, net, bits) || !nb.online {
@@ -439,8 +461,7 @@ impl Worker {
                 continue; // same MAC on two interfaces: one row is enough
             }
             let vendor = oui(&mac);
-            if is_new_mac(&self.mem, &mac) {
-                self.session_new.insert(mac.clone());
+            if note_if_new(&self.mem, &mut self.session_new, self.first_run, &mac) {
                 fresh.push(format!("{} ({})", nb.ip, vendor.unwrap_or("unknown vendor")));
             }
             let mut entry = self.mem.get(&mac).cloned().unwrap_or(MemEntry {
@@ -450,10 +471,12 @@ impl Worker {
                 ip: nb.ip.to_string(),
             });
             // A name already on file (a lookup from before, or the user's own
-            // rename) wins: only the unnamed cost a reverse-DNS round trip.
+            // rename) wins; otherwise a fresh cached answer, if one is still
+            // within its TTL; a cold address is queued for the caller.
             if entry.name.is_empty() {
-                if let Some(name) = self.resolve(nb.ip, &mut budget) {
-                    entry.name = name;
+                match self.cached(nb.ip) {
+                    Some(name) => entry.name = name,
+                    None => pending.push(nb.ip),
                 }
             }
             entry.last_seen = now;
@@ -493,16 +516,94 @@ impl Worker {
             });
         }
         sort_devices(&mut devices);
-        let _ = save_memory(&self.path, &self.mem);
-        Scan {
-            devices,
-            gateway,
-            me: iface.map(|i| i.ip),
-            subnet: subnet_label(net, bits),
+        (devices, fresh, pending)
+    }
+
+    /// One scan, in two passes: the neighbour table plus already-known names
+    /// go to the UI immediately via `tx`; only then are the cold addresses
+    /// resolved (in parallel) and a second, fully-named `Scan` returned.
+    fn scan(&mut self, tx: &Sender<WlEvent>) -> Scan {
+        let iface = run_ipconfig().and_then(|o| parse_ipconfig(&o));
+        let gateway = iface.as_ref().map(|i| i.gateway.clone());
+        let Some((net, bits)) = self.subnet(gateway.as_deref()) else {
+            return Scan { subnet: "no subnet".to_string(), at: Some(Local::now()), ..Scan::default() };
+        };
+        if self.sweep && self.cycle % SWEEP_EVERY == 0 {
+            sweep(net, bits);
+        }
+        self.cycle = self.cycle.wrapping_add(1);
+
+        let (mut devices, fresh, mut pending) = self.build(net, bits);
+        let me = iface.map(|i| i.ip);
+        let subnet = subnet_label(net, bits);
+        let _ = tx.send(WlEvent::Scan(Box::new(Scan {
+            devices: devices.clone(),
+            gateway: gateway.clone(),
+            me: me.clone(),
+            subnet: subnet.clone(),
             at: Some(Local::now()),
-            fresh,
+            fresh: Vec::new(), // announced once, on the final scan below
+            baseline: None,
+        })));
+
+        pending.truncate(MAX_LOOKUPS);
+        let resolved = resolve_many(&pending);
+        for (ip, name) in &resolved {
+            self.dns.insert(*ip, (name.clone(), Instant::now()));
+        }
+        let names: HashMap<Ipv4Addr, String> =
+            resolved.into_iter().filter_map(|(ip, n)| n.map(|n| (ip, n))).collect();
+        merge_names(&mut devices, &names);
+        for d in &devices {
+            if let (Some(name), Some(e)) = (&d.name, self.mem.get_mut(&d.mac)) {
+                if e.name.is_empty() {
+                    e.name = name.clone();
+                }
+            }
+        }
+
+        let baseline = self.first_run.then(|| devices.len());
+        self.first_run = false;
+        let _ = save_memory(&self.path, &self.mem);
+        Scan { devices, gateway, me, subnet, at: Some(Local::now()), fresh, baseline }
+    }
+}
+
+/// Fills in the name of any device still missing one, from freshly resolved
+/// reverse-DNS answers. Pure — no I/O — so it is easy to test on its own.
+fn merge_names(devices: &mut [Device], names: &HashMap<Ipv4Addr, String>) {
+    for d in devices.iter_mut() {
+        if d.name.is_none() {
+            if let Some(n) = names.get(&d.ip) {
+                d.name = Some(n.clone());
+            }
         }
     }
+}
+
+/// Resolves each address on up to [`DNS_PARALLEL`] threads sharing one work
+/// queue, instead of one after another — a scan with many cold addresses
+/// would otherwise block for up to `MAX_LOOKUPS * DNS_TIMEOUT`.
+fn resolve_many(ips: &[Ipv4Addr]) -> Vec<(Ipv4Addr, Option<String>)> {
+    if ips.is_empty() {
+        return Vec::new();
+    }
+    let next = AtomicUsize::new(0);
+    let (tx, rx) = mpsc::channel();
+    std::thread::scope(|s| {
+        for _ in 0..DNS_PARALLEL.min(ips.len()) {
+            let next = &next;
+            let tx = tx.clone();
+            s.spawn(move || loop {
+                let Some(&ip) = ips.get(next.fetch_add(1, Ordering::Relaxed)) else { return };
+                if tx.send((ip, reverse_dns(ip))).is_err() {
+                    return;
+                }
+            });
+        }
+    });
+    drop(tx);
+    rx.try_iter().collect()
 }
 
 fn run_ipconfig() -> Option<String> {
@@ -547,9 +648,13 @@ fn run(cfg: WastelandCfg, path: PathBuf, tx: Sender<WlEvent>, crx: Receiver<WlCm
     let mut next = Instant::now();
     loop {
         if Instant::now() >= next {
-            let scan = w.scan();
+            let scan = w.scan(&tx);
             if scan.devices.is_empty() && scan.subnet == "no subnet" {
                 let _ = tx.send(WlEvent::Error("no gateway found — set [wasteland] subnet".into()));
+            }
+            if let Some(n) = scan.baseline {
+                let _ =
+                    tx.send(WlEvent::Note(format!("wasteland: first scan — {n} devices recorded as known")));
             }
             if tx.send(WlEvent::Scan(Box::new(scan))).is_err() {
                 return;
@@ -581,14 +686,17 @@ fn run(cfg: WastelandCfg, path: PathBuf, tx: Sender<WlEvent>, crx: Receiver<WlCm
 
 // ---- the module --------------------------------------------------------------
 
-/// What the list keys mean right now.
+/// What the list keys mean right now. `Detail` and `Rename` bind to a MAC,
+/// not a list index — a background scan can re-sort the list (online devices
+/// move to the top, a stale one drops off) out from under an open view, and
+/// an index would then act on whatever now sits at that position instead.
 #[derive(Clone, Debug, PartialEq)]
 enum Mode {
     List,
-    /// Detail view of the selected device.
-    Detail,
-    /// `NAME> ` prompt over the selected device.
-    Rename(String),
+    /// Detail view of the device with this MAC.
+    Detail { mac: String },
+    /// `NAME> ` prompt over the device with this MAC.
+    Rename { mac: String, input: String },
 }
 
 pub struct Wasteland {
@@ -646,6 +754,20 @@ impl Wasteland {
 
     fn selected(&self) -> Option<&Device> {
         self.devices.get(self.sel)
+    }
+
+    fn find_mac(&self, mac: &str) -> Option<&Device> {
+        self.devices.iter().find(|d| d.mac == mac)
+    }
+
+    /// The device a key like `n`/`p` should act on right now: the one the
+    /// current `Detail`/`Rename` mode is bound to, or otherwise whatever the
+    /// list has selected.
+    fn acted_on(&self) -> Option<&Device> {
+        match &self.mode {
+            Mode::Detail { mac } | Mode::Rename { mac, .. } => self.find_mac(mac),
+            Mode::List => self.selected(),
+        }
     }
 
     fn move_sel(&mut self, delta: i32) {
@@ -746,7 +868,7 @@ impl Wasteland {
     }
 
     fn draw_list(&self, f: &mut Frame, area: Rect, t: Theme) {
-        let prompt_h = u16::from(matches!(self.mode, Mode::Rename(_)));
+        let prompt_h = u16::from(matches!(self.mode, Mode::Rename { .. }));
         let rows = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(1),
@@ -784,7 +906,7 @@ impl Wasteland {
             state.select(Some(self.sel.min(self.devices.len() - 1)));
             f.render_stateful_widget(List::new(items).highlight_style(t.tab_active), rows[2], &mut state);
         }
-        if let (Mode::Rename(input), true) = (&self.mode, rows[3].height > 0) {
+        if let (Mode::Rename { input, .. }, true) = (&self.mode, rows[3].height > 0) {
             let line = Line::from(vec![Span::styled("NAME> ", t.title), Span::raw(input.clone())]);
             f.render_widget(Paragraph::new(line), rows[3]);
             let x = (rows[3].x + 6 + input.chars().count() as u16)
@@ -850,8 +972,8 @@ impl Module for Wasteland {
     fn help(&self) -> &'static str {
         match self.mode {
             Mode::List => "↑/↓ select   enter details   n rename   r rescan   s sweep   1-9 tabs   q quit",
-            Mode::Detail => "p ping   n rename   esc back   q quit",
-            Mode::Rename(_) => "type a name · enter save · esc cancel",
+            Mode::Detail { .. } => "p ping   n rename   esc back   q quit",
+            Mode::Rename { .. } => "type a name · enter save · esc cancel",
         }
     }
 
@@ -889,7 +1011,7 @@ impl Module for Wasteland {
                             let _ = ctx.notify.send(Notice::Footer(format!("wasteland: new device {label}")));
                         }
                     }
-                    if !s.devices.is_empty() {
+                    if s.subnet != "no subnet" {
                         self.err = None;
                     }
                     self.devices = s.devices;
@@ -898,8 +1020,16 @@ impl Module for Wasteland {
                     self.subnet = s.subnet;
                     self.scanned = s.at;
                     self.sel = self.sel.min(self.devices.len().saturating_sub(1));
-                    if self.devices.is_empty() {
-                        self.mode = Mode::List;
+                    // A device the open Detail/Rename view is bound to can vanish
+                    // (aged out, or memory reset) between scans — drop back to
+                    // the list rather than act on a MAC that is no longer here.
+                    if let Mode::Detail { mac } | Mode::Rename { mac, .. } = &self.mode {
+                        if self.find_mac(mac).is_none() {
+                            self.mode = Mode::List;
+                            let _ = ctx
+                                .notify
+                                .send(Notice::Footer("wasteland: device no longer listed".into()));
+                        }
                     }
                 }
                 WlEvent::Ping { ip, rtt } => {
@@ -934,14 +1064,22 @@ impl Module for Wasteland {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return false;
         }
-        if let Mode::Rename(input) = &mut self.mode {
-            match Self::rename_key(input, key.code) {
+        if let Mode::Rename { mac, input } = &mut self.mode {
+            let commit = Self::rename_key(input, key.code);
+            let mac = mac.clone();
+            let input = input.clone();
+            match commit {
                 Some(true) => {
-                    let name = sanitize_name(input);
-                    if let Some(d) = self.devices.get_mut(self.sel) {
+                    let name = sanitize_name(&input);
+                    // Bound to the MAC, not `self.sel`: a background scan may
+                    // have re-sorted the list while the prompt was open.
+                    if let Some(d) = self.devices.iter_mut().find(|d| d.mac == mac) {
                         d.name = (!name.is_empty()).then(|| name.clone());
-                        let mac = d.mac.clone();
                         self.send(WlCmd::Rename { mac, name });
+                    } else {
+                        let _ = ctx
+                            .notify
+                            .send(Notice::Footer("wasteland: device no longer listed — rename cancelled".into()));
                     }
                     self.mode = Mode::List;
                 }
@@ -956,23 +1094,23 @@ impl Module for Wasteland {
             KeyCode::PageUp => self.move_sel(-(self.body_height.get().max(1) as i32)),
             KeyCode::PageDown => self.move_sel(self.body_height.get().max(1) as i32),
             KeyCode::Enter => {
-                if self.selected().is_some() {
-                    self.mode = Mode::Detail;
+                if let Some(d) = self.selected() {
+                    self.mode = Mode::Detail { mac: d.mac.clone() };
                 }
             }
             KeyCode::Esc | KeyCode::Backspace => {
-                if self.mode == Mode::Detail {
+                if matches!(self.mode, Mode::Detail { .. }) {
                     self.mode = Mode::List;
                 } else {
                     return false;
                 }
             }
             KeyCode::Char('n') => {
-                if let Some(d) = self.selected() {
-                    self.mode = Mode::Rename(d.name.clone().unwrap_or_default());
+                if let Some(d) = self.acted_on() {
+                    self.mode = Mode::Rename { mac: d.mac.clone(), input: d.name.clone().unwrap_or_default() };
                 }
             }
-            KeyCode::Char('p') => match self.selected() {
+            KeyCode::Char('p') => match self.acted_on() {
                 Some(d) => {
                     let ip = d.ip;
                     self.ping = Some((ip, "\u{2026}".to_string()));
@@ -999,8 +1137,11 @@ impl Module for Wasteland {
         // Looking at the tab is what acknowledges a new device.
         self.new_unseen.set(false);
         self.body_height.set(area.height.saturating_sub(2));
-        match (&self.mode, self.selected()) {
-            (Mode::Detail, Some(d)) => self.draw_detail(f, area, t, d),
+        match &self.mode {
+            Mode::Detail { mac } => match self.find_mac(mac) {
+                Some(d) => self.draw_detail(f, area, t, d),
+                None => self.draw_list(f, area, t),
+            },
             _ => self.draw_list(f, area, t),
         }
     }
@@ -1165,10 +1306,14 @@ mod tests {
     const MAC: [u8; 6] = [0xb8, 0x27, 0xeb, 0x01, 0x02, 0x03];
 
     fn dev(ip: [u8; 4], online: bool) -> Device {
+        dev_mac(ip, online, &MAC)
+    }
+
+    fn dev_mac(ip: [u8; 4], online: bool, mac: &[u8; 6]) -> Device {
         let now = Local::now().timestamp();
         Device {
             ip: Ipv4Addr::from(ip),
-            mac: mac_string(&MAC),
+            mac: mac_string(mac),
             name: Some("pi-hole".into()),
             vendor: Some("Raspberry Pi"),
             first_seen: now - 86_400,
@@ -1203,6 +1348,19 @@ mod tests {
         assert!(!keep([192, 168, 1, 9], &MAC[..4]), "short MAC");
         assert!(!keep([169, 254, 3, 4], &MAC), "link-local");
         assert!(!keep([10, 0, 0, 5], &MAC), "other subnet");
+    }
+
+    #[test]
+    fn keep_entry_only_drops_the_subnets_own_network_and_broadcast() {
+        // On a /16, "x.x.2.0" and "x.x.2.255" are ordinary host addresses —
+        // only the /16's own network (10.1.0.0) and broadcast (10.1.255.255)
+        // are noise.
+        let net16 = Ipv4Addr::new(10, 1, 0, 0);
+        let keep16 = |ip: [u8; 4]| keep_entry(Ipv4Addr::from(ip), &MAC, net16, 16);
+        assert!(keep16([10, 1, 2, 0]), "not the /16 network address");
+        assert!(keep16([10, 1, 2, 255]), "not the /16 broadcast address");
+        assert!(!keep16([10, 1, 0, 0]), "the /16 network address itself");
+        assert!(!keep16([10, 1, 255, 255]), "the /16 broadcast address itself");
     }
 
     #[test]
@@ -1295,6 +1453,40 @@ mod tests {
     }
 
     #[test]
+    fn baseline_scan_flags_nothing_new_later_scans_do() {
+        let mut mem = Memory::new();
+        let mut session_new = HashSet::new();
+        assert!(
+            !note_if_new(&mem, &mut session_new, true, "b8-27-eb-01-02-03"),
+            "an empty-memory baseline scan flags nothing"
+        );
+        assert!(session_new.is_empty());
+        assert!(
+            note_if_new(&mem, &mut session_new, false, "b8-27-eb-01-02-03"),
+            "same MAC, a later scan: genuinely new"
+        );
+        assert!(session_new.contains("b8-27-eb-01-02-03"));
+        mem.insert("b8-27-eb-01-02-03".into(), MemEntry::default());
+        assert!(
+            !note_if_new(&mem, &mut session_new, false, "b8-27-eb-01-02-03"),
+            "now on file, no longer new"
+        );
+    }
+
+    #[test]
+    fn merge_names_only_fills_devices_still_missing_a_name() {
+        let mut devices = vec![dev([192, 168, 1, 9], true), dev([192, 168, 1, 10], true)];
+        devices[1].name = None;
+        let mut names = HashMap::new();
+        names.insert(Ipv4Addr::new(192, 168, 1, 9), "should-not-overwrite".to_string());
+        names.insert(Ipv4Addr::new(192, 168, 1, 10), "nas".to_string());
+        names.insert(Ipv4Addr::new(192, 168, 1, 99), "unrelated".to_string());
+        merge_names(&mut devices, &names);
+        assert_eq!(devices[0].name.as_deref(), Some("pi-hole"), "already-named device is untouched");
+        assert_eq!(devices[1].name.as_deref(), Some("nas"), "unnamed device gets the resolved name");
+    }
+
+    #[test]
     fn sort_puts_online_first_then_numeric_ip_order() {
         let mut v = vec![
             dev([192, 168, 1, 10], true),
@@ -1330,7 +1522,7 @@ mod tests {
         let mut m = Wasteland::new();
         m.devices = vec![dev([192, 168, 1, 9], true)];
         assert!(m.on_key(KeyEvent::from(KeyCode::Char('n')), &ctx));
-        assert_eq!(m.mode, Mode::Rename("pi-hole".into()));
+        assert_eq!(m.mode, Mode::Rename { mac: mac_string(&MAC), input: "pi-hole".into() });
         assert!(m.help().contains("esc cancel"));
         for _ in 0..7 {
             m.on_key(KeyEvent::from(KeyCode::Backspace), &ctx);
@@ -1354,6 +1546,36 @@ mod tests {
     }
 
     #[test]
+    fn rename_commits_by_mac_even_after_the_list_is_re_sorted() {
+        let (ctx, _rx) = crate::shell::test_ctx(toml::Table::new());
+        const MAC_B: [u8; 6] = [0x24, 0x0a, 0xc4, 0xaa, 0xbb, 0xcc];
+        let mut m = Wasteland::new();
+        m.devices = vec![dev_mac([192, 168, 1, 9], true, &MAC), dev_mac([192, 168, 1, 20], true, &MAC_B)];
+        m.sel = 0;
+        assert!(m.on_key(KeyEvent::from(KeyCode::Char('n')), &ctx));
+        assert_eq!(m.mode, Mode::Rename { mac: mac_string(&MAC), input: "pi-hole".into() });
+
+        // A background scan re-sorts the list while the prompt is open: the
+        // device the prompt is bound to moves to index 1.
+        m.devices.swap(0, 1);
+        assert_eq!(m.sel, 0, "sel still points at whatever is now at index 0");
+
+        for _ in 0..7 {
+            m.on_key(KeyEvent::from(KeyCode::Backspace), &ctx);
+        }
+        for c in "nas".chars() {
+            m.on_key(KeyEvent::from(KeyCode::Char(c)), &ctx);
+        }
+        assert!(m.on_key(KeyEvent::from(KeyCode::Enter), &ctx));
+        assert_eq!(m.mode, Mode::List);
+
+        let renamed = m.devices.iter().find(|d| d.mac == mac_string(&MAC)).unwrap();
+        let other = m.devices.iter().find(|d| d.mac == mac_string(&MAC_B)).unwrap();
+        assert_eq!(renamed.name.as_deref(), Some("nas"), "the ORIGINAL device (by MAC) is renamed");
+        assert_eq!(other.name.as_deref(), Some("pi-hole"), "the device now sitting at index 0 is untouched");
+    }
+
+    #[test]
     fn selection_detail_and_sweep_toggle() {
         let (ctx, rx) = crate::shell::test_ctx(toml::Table::new());
         let mut m = Wasteland::new();
@@ -1366,7 +1588,7 @@ mod tests {
         m.move_sel(-10);
         assert_eq!(m.sel, 0);
         assert!(m.on_key(KeyEvent::from(KeyCode::Enter), &ctx));
-        assert_eq!(m.mode, Mode::Detail);
+        assert_eq!(m.mode, Mode::Detail { mac: mac_string(&MAC) });
         assert!(m.help().contains("p ping"));
         assert!(m.on_key(KeyEvent::from(KeyCode::Esc), &ctx));
         assert_eq!(m.mode, Mode::List);
@@ -1392,6 +1614,7 @@ mod tests {
             subnet: "192.168.1.0/24".into(),
             at: Some(Local::now()),
             fresh: vec!["192.168.1.42 (Raspberry Pi)".into()],
+            baseline: None,
         })))
         .unwrap();
         assert_eq!(m.poll(&ctx), 1);
@@ -1421,6 +1644,27 @@ mod tests {
         assert_eq!(m.poll(&ctx), 3);
         assert_eq!(m.ping.as_ref().map(|p| p.1.clone()), Some("7 ms".to_string()));
         assert_eq!(m.err.as_deref(), Some("no gateway found"));
+
+        // A "no subnet" scan must not clear the error it caused.
+        tx.send(WlEvent::Scan(Box::new(Scan {
+            subnet: "no subnet".into(),
+            at: Some(Local::now()),
+            ..Scan::default()
+        })))
+        .unwrap();
+        m.poll(&ctx);
+        assert_eq!(m.err.as_deref(), Some("no gateway found"), "still failing, error stays");
+
+        // A scan on a real subnet that simply finds nothing clears a stale
+        // error — success is not the same as "devices were found".
+        tx.send(WlEvent::Scan(Box::new(Scan {
+            subnet: "192.168.1.0/24".into(),
+            at: Some(Local::now()),
+            ..Scan::default()
+        })))
+        .unwrap();
+        m.poll(&ctx);
+        assert_eq!(m.err, None, "an empty but successful scan clears a stale error");
     }
 
     #[test]
@@ -1506,12 +1750,14 @@ mod tests {
             list.sel = 1;
             let mut detail = Wasteland::new();
             detail.devices = vec![dev([192, 168, 1, 9], true)];
-            detail.mode = Mode::Detail;
+            detail.mode = Mode::Detail { mac: mac_string(&MAC) };
             detail.ping = Some((Ipv4Addr::new(192, 168, 1, 9), "7 ms".into()));
+            let mut detail_vanished = Wasteland::new();
+            detail_vanished.mode = Mode::Detail { mac: mac_string(&MAC) };
             let mut prompt = Wasteland::new();
             prompt.devices = vec![dev([192, 168, 1, 9], true)];
-            prompt.mode = Mode::Rename("Árvíztűrő".into());
-            vec![empty, loading, errored, list, detail, prompt]
+            prompt.mode = Mode::Rename { mac: mac_string(&MAC), input: "Árvíztűrő".into() };
+            vec![empty, loading, errored, list, detail, detail_vanished, prompt]
         };
         for (w, h) in [(40u16, 12u16), (1, 1), (120, 40)] {
             for m in states() {

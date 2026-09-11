@@ -167,7 +167,7 @@ rustflags = ["-C", "linker-flavor=ld.lld", "-C", "link-self-contained=yes"]
 | Key | Action |
 |---|---|
 | `←` `→` `Tab` `Shift+Tab` | switch tab |
-| `1`–`9` | jump to OVERVIEW / STAT / WEATHER / RADIO / MUSIC / NET / WIFI / CLOCK / NEWS (MAIL, NOTES, SYSLOG, ART, GLOBE and TERM follow: `←` `→`) |
+| `1`–`9` | jump to OVERVIEW / STAT / WEATHER / RADIO / MUSIC / NET / WIFI / WASTELAND / CLOCK (NEWS, MAIL, NOTES, SYSLOG, ART, GLOBE and TERM follow: `←` `→`) |
 | `↑` `↓` `Enter` | RADIO: select / tune station |
 | `*` | RADIO: save the playing track (artist – title) into the `Favorite tracks` note in `notes.md` |
 | `Space` | play / pause (from any tab) |
@@ -286,19 +286,26 @@ access for desktop apps in Settings › Privacy & security › Location.
 neighbour (ARP) table with `GetIpNetTable2`, keeps the entries that belong to
 your subnet — the gateway's /24 unless `[wasteland] subnet` says otherwise —
 and lists them with name, vendor, MAC and how long ago each one was last seen.
-The gateway is marked `⌂ gateway`, this machine `you`, and a MAC that has
-never been here before is flagged `NEW` (plus a `☢ new` badge in the header
-and one footer line, until you look at the tab). Names come from reverse DNS,
-with a small built-in OUI table as the fallback, and `n` renames a device for
-good. `Enter` opens the details, where `p` pings it once, and below 80 columns
-the list keeps IP, NAME and SEEN only.
+The gateway is marked `⌂ gateway`, this machine `you`, and — once a first
+scan has recorded a baseline — a MAC that has never been here before is
+flagged `NEW` (plus a `☢ new` badge in the header and one footer line, until
+you look at the tab); that very first scan instead prints one footer line
+(`wasteland: first scan — N devices recorded as known`) and flags nothing, so
+an empty memory does not paint the whole network `NEW`. Names come from
+reverse DNS, with a small built-in OUI table as the fallback, and `n` renames
+a device for good. `Enter` opens the details, where `p` pings it once, and
+below 80 columns the list keeps IP, NAME and SEEN only.
 
 Devices are remembered in `wasteland.json` next to the executable (MAC → name,
 first and last seen, last local IP), written atomically through a `.tmp` file;
 a corrupt file is never fatal, the tab starts a fresh memory and says so in
 the footer. A device that stops answering stays listed, dimmed, for seven days
-before it is forgotten. Nothing leaves your LAN: no address outside the subnet
-is ever touched and nothing is uploaded anywhere.
+before it is forgotten. No connection is ever made outside the subnet — the
+ping sweep and the neighbour table are purely local — but reverse-DNS lookups
+are the exception: they go out to whatever resolver Windows is configured to
+use, so a public resolver sees the `in-addr.arpa` queries for your local
+addresses. Each answer (or non-answer) is cached for an hour, so a device is
+looked up again only that often.
 
 By default the tab also runs a **ping sweep** on its first scan and every
 fifth one after that — one ICMP echo to each of the 254 addresses of the /24,
