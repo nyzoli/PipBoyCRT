@@ -46,6 +46,7 @@ fn main() -> anyhow::Result<()> {
         Box::new(modules::music::Music::new()),
         Box::new(modules::net::Net::new()),
         Box::new(modules::wifi::Wifi::new()),
+        Box::new(modules::wasteland::Wasteland::new()),
         Box::new(modules::clock::Clock::new()),
         Box::new(modules::news::News::new()),
         Box::new(modules::mail::Mail::new()),

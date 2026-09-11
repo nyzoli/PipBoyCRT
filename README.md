@@ -14,7 +14,7 @@ rather than operated.
   so it works in any terminal, and it looks the part inside
   [cool-retro-term-windows](https://github.com/pushingpandas/cool-retro-term-windows),
   which supplies the CRT glow (see [Getting started](#getting-started)).
-- **What it gives you** — fifteen tabs (below), an OVERVIEW that composes the
+- **What it gives you** — sixteen tabs (below), an OVERVIEW that composes the
   important bits of all of them, a header with the battery, the playing station
   and the unread count, and a SETUP tab to switch off what you don't need.
 - **What it is for** — a second monitor, an old laptop on the shelf, the
