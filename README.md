@@ -365,6 +365,32 @@ default — in a Windows pseudo console (ConPTY) and draws its screen through a
 `claude` at that prompt to talk to Claude Code from the vault, or set
 `[term] command = "claude"` to land in it directly.
 
+### What it is good for
+
+The other tabs are for glancing; this one is for the moments you actually
+have to *do* something without leaving the vault:
+
+- **A plain shell.** `git pull`, `ping`, `winget upgrade`, a quick `python`
+  REPL, `ssh` to the box in the basement — it is your PowerShell, just greener.
+- **Claude Code, in character.** Start `claude` and it wakes up as the Pip-Boy's
+  terminal companion (the `vault/CLAUDE.md` persona): ask it what the syslog
+  errors mean, to turn a note into a `/quest`, or to set up Himalaya for you
+  (see [MAIL](#mail-and-the-himalaya-cli)). It runs with your own login; the
+  Pip-Boy never touches a key or a token.
+- **The rest of your mail.** MAIL only reads. When you need to reply, move or
+  delete, `himalaya` itself is right here — `himalaya message reply 42`, done,
+  no other window.
+- **Full-screen TUIs, within reason.** Anything that talks VT100 works: `btop`,
+  `lazygit`, `vim`, even Far Manager. They get 16 colours and no mouse, and the
+  really busy ones are happier in their own cool-retro-term window — but for
+  a quick look they run.
+- **Watching something.** `ping -t`, a build, a log tail: leave it running,
+  switch to another tab, come back. The process keeps going; the header shows
+  `⌨ TERM` while your keys belong to it.
+
+What it is *not* for: an eight-hour editing session in a 16-colour window
+with no mouse. Press `F12` to give the keys back to the Pip-Boy whenever you like.
+
 Nothing starts on its own. The tab shows the command and waits; the first
 `Enter` (or `i`) spawns the process **and attaches the keyboard**. While
 attached, *every* key goes to the process — `q`, the digits, `Ctrl+C` included,
