@@ -1,0 +1,227 @@
+theme = "color"   # color | mono
+
+[shell]
+# Modules that do not start at all (the SETUP tab writes this line).
+# ids: stat weather radio music net wifi clock news mail notes syslog art globe term
+disabled = []
+
+[weather]
+# The same coordinates feed the air-quality (EAQI, pollen) request too.
+name = "Budapest"
+lat  = 47.4979
+lon  = 19.0402
+
+[[radio.station]]
+name = "Radio Paradise"
+url  = "https://stream.radioparadise.com/mp3-128"
+
+[[radio.station]]
+name = "Radio Paradise Mellow"
+url  = "https://stream.radioparadise.com/mellow-128"
+
+[[radio.station]]
+name = "Radio Paradise Rock"
+url  = "https://stream.radioparadise.com/rock-128"
+
+[[radio.station]]
+name = "Radio Paradise Global"
+url  = "https://stream.radioparadise.com/global-128"
+
+[[radio.station]]
+name = "SomaFM Groove Salad"
+url  = "https://ice1.somafm.com/groovesalad-128-mp3"
+
+[[radio.station]]
+name = "SomaFM Drone Zone"
+url  = "https://ice1.somafm.com/dronezone-128-mp3"
+
+[[radio.station]]
+name = "SomaFM Secret Agent"
+url  = "https://ice1.somafm.com/secretagent-128-mp3"
+
+[[radio.station]]
+name = "SomaFM Lush"
+url  = "https://ice1.somafm.com/lush-128-mp3"
+
+[[radio.station]]
+name = "SomaFM Space Station"
+url  = "https://ice1.somafm.com/spacestation-128-mp3"
+
+[[radio.station]]
+name = "SomaFM Underground 80s"
+url  = "https://ice1.somafm.com/u80s-128-mp3"
+
+[[radio.station]]
+name = "SomaFM Indie Pop Rocks"
+url  = "https://ice1.somafm.com/indiepop-128-mp3"
+
+[[radio.station]]
+name = "SomaFM Boot Liquor"
+url  = "https://ice1.somafm.com/bootliquor-128-mp3"
+
+[[radio.station]]
+name = "SomaFM DEF CON Radio"
+url  = "https://ice1.somafm.com/defcon-128-mp3"
+
+[[radio.station]]
+name = "SomaFM Fluid"
+url  = "https://ice1.somafm.com/fluid-128-mp3"
+
+[[radio.station]]
+name = "SomaFM Left Coast 70s"
+url  = "https://ice1.somafm.com/seventies-128-mp3"
+
+[[radio.station]]
+name = "SomaFM Sonic Universe"
+url  = "https://ice1.somafm.com/sonicuniverse-128-mp3"
+
+[[radio.station]]
+name = "SomaFM Vaporwaves"
+url  = "https://ice1.somafm.com/vaporwaves-128-mp3"
+
+[[radio.station]]
+name = "SomaFM Metal Detector"
+url  = "https://ice1.somafm.com/metal-128-mp3"
+
+[[radio.station]]
+name = "Nightride FM"
+url  = "https://stream.nightride.fm/nightride.mp3"
+
+[[radio.station]]
+name = "Nightride Chillsynth"
+url  = "https://stream.nightride.fm/chillsynth.mp3"
+
+[[radio.station]]
+name = "Nightride Datawave"
+url  = "https://stream.nightride.fm/datawave.mp3"
+
+[[radio.station]]
+name = "Nightride Spacesynth"
+url  = "https://stream.nightride.fm/spacesynth.mp3"
+
+[[radio.station]]
+name = "Nightride Darksynth"
+url  = "https://stream.nightride.fm/darksynth.mp3"
+
+[[radio.station]]
+name = "Nightride Horrorsynth"
+url  = "https://stream.nightride.fm/horrorsynth.mp3"
+
+[[radio.station]]
+name = "Nightride EBSM"
+url  = "https://stream.nightride.fm/ebsm.mp3"
+
+[[radio.station]]
+name = "FIP"
+url  = "https://icecast.radiofrance.fr/fip-midfi.mp3"
+
+[[radio.station]]
+name = "FIP Jazz"
+url  = "https://icecast.radiofrance.fr/fipjazz-midfi.mp3"
+
+[[radio.station]]
+name = "FIP Electro"
+url  = "https://icecast.radiofrance.fr/fipelectro-midfi.mp3"
+
+[[radio.station]]
+name = "FIP Rock"
+url  = "https://icecast.radiofrance.fr/fiprock-midfi.mp3"
+
+[[radio.station]]
+name = "FIP Groove"
+url  = "https://icecast.radiofrance.fr/fipgroove-midfi.mp3"
+
+[[radio.station]]
+name = "FIP World"
+url  = "https://icecast.radiofrance.fr/fipworld-midfi.mp3"
+
+[[radio.station]]
+name = "France Musique"
+url  = "https://icecast.radiofrance.fr/francemusique-midfi.mp3"
+
+[[radio.station]]
+name = "Radio Swiss Jazz"
+url  = "https://stream.srg-ssr.ch/m/rsj/mp3_128"
+
+[[radio.station]]
+name = "Radio Swiss Classic"
+url  = "https://stream.srg-ssr.ch/m/rsc_de/mp3_128"
+
+[[radio.station]]
+name = "Radio Swiss Pop"
+url  = "https://stream.srg-ssr.ch/m/rsp/mp3_128"
+
+[[radio.station]]
+name = "KEXP Seattle"
+url  = "https://kexp-mp3-128.streamguys1.com/kexp128.mp3"
+
+[[radio.station]]
+name = "WFMU"
+url  = "https://stream0.wfmu.org/freeform-128k"
+
+[net]
+targets = ["gateway", "1.1.1.1", "8.8.8.8"]
+speedtest_history = 20
+
+[clock]
+zones = ["America/New_York", "Asia/Tokyo"]
+timer_minutes = 25
+view = "normal"   # starting view: "normal" / "digital" / "analog" (`v` cycles them)
+
+# RSS/Atom feed URLs next to the built-in Hacker News front page; limit = items per source
+[news]
+feeds = [
+    "https://www.nasa.gov/feed/",
+    "https://feeds.arstechnica.com/arstechnica/index",
+    "https://www.theverge.com/rss/index.xml",
+]
+limit = 30
+
+# Markdown note file next to the executable (created on the first save)
+[notes]
+file = "notes.md"
+
+# Seconds between Wi-Fi scans (minimum 5; `r` scans right away)
+[wifi]
+interval = 15
+
+# Embedded terminal: a PowerShell prompt by default; type `claude` in it (or set
+# command = "claude") to talk to Claude Code from the vault. The command is looked
+# up on the PATH as <command>.exe/.cmd/.bat (an absolute path is used as is);
+# cwd is relative to the executable
+[term]
+command = "pwsh"
+args = []
+cwd = "vault"
+release_key = "f12"
+scrollback = 1000
+
+# ART holotape gallery: ANSI art from 16colo.rs and streamed ascii.live
+# animations. `animations` are ascii.live names (https://ascii.live/<name>);
+# nothing is written to disk, every picture lives in memory only
+[art]
+animations = ["parrot", "nyan", "donut", "dvd", "batman", "forrest", "knot", "coin", "playstation", "spidyswing"]
+
+# MUSIC: folder browser over a local library; one directory level is read at a
+# time, so a big tree on a network share is fine
+[music]
+dir = "music"
+shuffle = false
+
+# MAIL: read-only inbox through the Himalaya CLI (install it, then run
+# `himalaya configure` once). interval is in seconds, minimum 30
+[mail]
+command = "himalaya"
+account = ""          # empty = Himalaya's default account
+mailbox = "INBOX"
+interval = 300
+page_size = 30
+
+# SYSLOG: recent Windows event-log errors and warnings (System + Application),
+# read with one fixed Get-WinEvent PowerShell call. interval is in seconds,
+# minimum 60
+[syslog]
+hours = 24          # look back this many hours (1-168)
+max = 200           # most events per refresh (10-500)
+interval = 300
+levels = "warn"     # "error" = critical + error only, "warn" = with warnings

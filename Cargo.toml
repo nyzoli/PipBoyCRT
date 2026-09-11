@@ -1,0 +1,44 @@
+[package]
+name = "pipboy"
+version = "0.6.0"
+edition = "2021"
+description = "A Fallout Pip-Boy style terminal dashboard for Windows, built for cool-retro-term"
+license = "MIT"
+repository = "https://github.com/nyzoli/PipBoyCRT"
+readme = "README.md"
+keywords = ["tui", "ratatui", "dashboard", "fallout", "windows"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+anyhow = "1"
+chrono = "0.4"
+ratatui = "0.30"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+sysinfo = "0.39"
+wmi = "0.18"
+starship-battery = "0.11"
+stream-download = { version = "0.24", default-features = false, features = ["reqwest-native-tls", "temp-storage", "http"] }
+icy-metadata = { version = "0.6", default-features = false, features = ["reqwest"] }
+# MUSIC: .m4a needs the mp4 container (symphonia-isomp4), .wav needs the pcm codec.
+rodio = { version = "0.22", default-features = false, features = ["playback", "symphonia-mp3", "symphonia-aac", "symphonia-isomp4", "symphonia-flac", "symphonia-wav", "symphonia-pcm"] }
+chrono-tz = "0.10"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_NetworkManagement_WiFi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+rustfft = "6"
+feed-rs = "2"
+edtui = { version = "0.11", default-features = false }
+portable-pty = "0.9.0"
+vt100 = "0.16.2"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[target.x86_64-pc-windows-gnullvm.dependencies]
+# Only used on the gnullvm target: ships the Windows import libraries rustup lacks (see build.rs)
+winapi-x86_64-pc-windows-gnu = "0.4"
