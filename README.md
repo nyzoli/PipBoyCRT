@@ -1,60 +1,54 @@
 # PipBoyCRT
 
-![PipBoyCRT — the GLOBE tab in cool-retro-term: a braille world map with the day/night terminator, your location and the ISS](docs/img/globe.jpg)
+![PipBoyCRT — the OVERVIEW tab in cool-retro-term: system load, clock, quest timer, weather, radio, news, mail and more on one CRT screen](docs/img/overview.jpg)
 
-A Fallout Pip-Boy style terminal dashboard for Windows, written in Rust with
-[ratatui](https://ratatui.rs). Fifteen tabs: **OVERVIEW** (everything at a glance:
-compact stats, big clock, weather, radio, network, timer), **STAT** (CPU, memory,
-disks, network, GPU, battery; `s` toggles a S.P.E.C.I.A.L. character sheet that
-derives the seven attributes from the machine itself — cores and clock, Wi-Fi
-networks in range, uptime and battery, saved favourites, RAM and GPU, free CPU
-and process count, and the day plus the weather code — with perks to match),
-**WEATHER** (Open-Meteo, no API key: a NOW panel with the block-font
-temperature next to an AIR & POLLEN panel — European AQI, PM2.5/PM10/O₃/NO₂
-bars and pollen levels — with the sunrise-to-sunset arc; a full-width NEXT 24
-HOURS panel with a braille temperature curve over multi-row precipitation bars;
-and 7 days of temperature ranges on one shared scale; narrow windows keep the
-compact list plus a one-line AQI summary), **RADIO**
-(internet radio with ICY track titles and a VU meter, 37 built-in international
-stations; spectrum VU on wide windows, level bar on narrow ones), **MUSIC**
-(your own music library as a folder browser on the same mixer: mp3, aac/m4a, flac,
-wav, shuffle, VU), **NET** (ping
-to the gateway and public resolvers with sparklines and loss, Wi-Fi signal,
-traceroute, a Cloudflare down/up SPEEDTEST with history), **CLOCK** (big clock, world clocks, sun & moon, a quest timer
-that ends in a radiation-alarm animation with synthesized sound; `v` cycles
-three views: the normal tab, a full-screen digital clock in a shadowed block
-font and a full-screen analog dial with a chronograph day/date window), **NEWS**
-(Hacker News front page plus your own RSS/Atom feeds, with an in-terminal
-reader view), **MAIL** (your inbox through the Himalaya CLI: list, reader, unread
-count; accounts and passwords stay in Himalaya's own config), **NOTES** (a markdown holotape: notes list, content pane and a
-built-in editor), **SYSLOG** (the last 24 hours of Windows event-log
-errors and warnings, with a detail view), **WIFI** (see below), **ART** (a holotape gallery: ANSI art
-from the 16colo.rs archive and ascii.live animations), **GLOBE** (a braille
-world map with the day/night terminator, your own location, the subsolar
-point and the live ISS position) and **TERM** (an embedded
-terminal: a PowerShell prompt by default, ready for `claude`, see below).
+**PipBoyCRT is a Fallout Pip-Boy for your desk.** It is a terminal dashboard
+for Windows that puts the things you would otherwise open five apps for —
+system load, weather, radio, your inbox, the news, notes, the Wi-Fi around you,
+a world map — on one retro CRT screen, one tab each, made to be glanced at
+rather than operated.
 
-**WIFI** is a tab of its own: it scans through the Windows WlanAPI (never
-`netsh`, whose output is localized), lists the networks in range with band,
-channel, dBm and a signal bar (`#` = secured, `*` = connected), draws the
-channel congestion of the selected band as one bell curve per access point,
-names the least busy channel per band, and joins a network with `c`. The
-passphrase typed at the `PASSWORD>` prompt goes straight into a generated
-WPA2-PSK / WPA3-SAE profile and is wiped from memory afterwards — it is never
-written to disk, a log or the status line. Windows only shows SSIDs to an app
-that may use location services, so if the list stays empty, allow location
-access for desktop apps in Settings › Privacy & security › Location.
+- **What it is** — a single small `pipboy.exe` written in Rust with
+  [ratatui](https://ratatui.rs). No installer, no accounts, no API keys, no
+  telemetry; it only writes next to itself. It draws with the 16 ANSI colours,
+  so it works in any terminal, and it looks the part inside
+  [cool-retro-term-windows](https://github.com/pushingpandas/cool-retro-term-windows),
+  which supplies the CRT glow (see [Getting started](#getting-started)).
+- **What it gives you** — fifteen tabs (below), an OVERVIEW that composes the
+  important bits of all of them, a header with the battery, the playing station
+  and the unread count, and a SETUP tab to switch off what you don't need.
+- **What it is for** — a second monitor, an old laptop on the shelf, the
+  terminal you keep open anyway: leave it running and look at it. It idles at
+  4 frames per second and speeds up only where something moves.
+- **What it is not** — a file manager, a mail client or a chat: those exist as
+  their own terminal programs, and the TERM tab runs them.
 
-It is meant to run inside
-[cool-retro-term-windows](https://github.com/pushingpandas/cool-retro-term-windows),
-which provides the CRT look; the app itself only uses the 16 ANSI colors, so any
-terminal theme applies. See [Getting started](#getting-started) for the setup.
+### The tabs
+
+| Tab | What it shows |
+|---|---|
+| **OVERVIEW** | Everything at a glance: compact stats, big clock and quest timer, weather, radio with VU, news, mail, notes, Wi-Fi, syslog, globe |
+| **STAT** | CPU per core, memory, GPU, disks, network throughput, battery, uptime, top processes; `s` flips to a **S.P.E.C.I.A.L.** character sheet derived from the machine, perks included |
+| **WEATHER** | Open-Meteo, no key: NOW panel with a block-font temperature, AIR & POLLEN with a plain-language verdict, UV scale, sunrise-to-sunset arc, 24-hour temperature curve with labelled points over precipitation bars, 7-day ranges |
+| **RADIO** | Internet radio with ICY track titles, 37 international stations built in, spectrum VU; `*` saves the playing track into your notes |
+| **MUSIC** | Your own music folder as a browser (mp3, aac/m4a, flac, wav), shuffle, VU; it and RADIO pause each other |
+| **NET** | Ping to the gateway and public resolvers with sparklines and loss, traceroute, a Cloudflare down/up SPEEDTEST with history |
+| **WIFI** | Networks in range with band, channel, dBm; channel congestion as bell curves; best channel per band; connect with a password prompt |
+| **CLOCK** | Big clock, world clocks, sun & moon, a quest timer that ends in a radiation alarm; `v` cycles a full-screen shadowed digital clock and a full-panel analog dial with a day/date window |
+| **NEWS** | Hacker News front page plus your RSS/Atom feeds, with a reader view and on-demand article fetch |
+| **MAIL** | Your inbox through the Himalaya CLI: list, reader, unread count — read-only, credentials stay in Himalaya |
+| **NOTES** | Sticky notes in `notes.md` with a Notepad-like editor |
+| **SYSLOG** | The last 24 hours of Windows event-log errors and warnings, with details |
+| **ART** | A holotape gallery: ANSI art from the 16colo.rs archive and ascii.live animations |
+| **GLOBE** | A braille world map with the day/night terminator, your location, the subsolar point and the live ISS |
+| **TERM** | A real terminal inside the Pip-Boy (`pwsh` by default) — run `claude` in it with the shipped Vault-Tec persona |
+| **SETUP** | Switch modules on and off, with a line about each; disabled ones never start |
 
 ## Gallery
 
 | | |
 |---|---|
-| ![OVERVIEW — every module at a glance](docs/img/overview.jpg) | ![WEATHER — forecast, air quality, pollen, UV](docs/img/weather.jpg) |
+| ![GLOBE — a braille world map with the day/night terminator and the ISS](docs/img/globe.jpg) | ![WEATHER — forecast, air quality, pollen, UV](docs/img/weather.jpg) |
 | ![STAT — CPU, memory, GPU, disks, network](docs/img/stat.jpg) | ![CLOCK — the full-panel analog dial](docs/img/clock-analog.jpg) |
 | ![The quest timer's radiation alarm](docs/img/timer.jpg) | ![ART — ANSI art from the 16colo.rs archive](docs/img/art.jpg) |
 
@@ -265,6 +259,19 @@ no CPU and no network at all. Disabling a module that has already started
 only hides it -- its background work keeps running until the next launch,
 and its global keys (radio play/pause, volume) still work. SETUP itself
 cannot be disabled.
+
+## WIFI
+
+**WIFI** scans through the Windows WlanAPI (never
+`netsh`, whose output is localized), lists the networks in range with band,
+channel, dBm and a signal bar (`#` = secured, `*` = connected), draws the
+channel congestion of the selected band as one bell curve per access point,
+names the least busy channel per band, and joins a network with `c`. The
+passphrase typed at the `PASSWORD>` prompt goes straight into a generated
+WPA2-PSK / WPA3-SAE profile and is wiped from memory afterwards — it is never
+written to disk, a log or the status line. Windows only shows SSIDs to an app
+that may use location services, so if the list stays empty, allow location
+access for desktop apps in Settings › Privacy & security › Location.
 
 ## ART
 
