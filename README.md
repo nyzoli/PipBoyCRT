@@ -229,6 +229,70 @@ nothing. The list is `[art] animations` in `config.toml`. From 100 columns the
 file (or animation) list gets its own column on the left; narrower, only the
 picture and its name line are shown.
 
+## MAIL and the Himalaya CLI
+
+The MAIL tab does not speak IMAP itself. It drives the
+[Himalaya](https://github.com/pimalaya/himalaya) command-line mail client
+(v2 or newer) as a child process and reads its `--json` output, so your
+accounts, passwords and OAuth tokens live in Himalaya's own configuration and
+never touch `config.toml`. What the tab does: list a mailbox, cycle mailboxes
+with `[` `]`, open a message with `Enter` (which marks it seen on the server),
+show the unread count in the header and on OVERVIEW. What it deliberately does
+not do: compose, reply, delete or move anything.
+
+### Installing Himalaya
+
+1. Get the CLI: `scoop install himalaya`, or download the Windows binary from
+   the [Himalaya releases](https://github.com/pimalaya/himalaya/releases) and put
+   it on your `PATH` (or set `[mail] command` to its full path).
+2. Run `himalaya configure` and follow the wizard: display name, e-mail, IMAP
+   host and port, SMTP host (unused by the Pip-Boy but the wizard asks), and how
+   the password is stored (a shell command such as a password manager, or a raw
+   value in the file).
+3. Check it works on its own first: `himalaya envelope list` should print your
+   inbox. If it does, the MAIL tab works too; if it does not, the tab shows the
+   very same error on its title line.
+
+The config lands in `%APPDATA%\himalaya\config.toml` (or
+`~/.config/himalaya/config.toml`). A minimal IMAP account looks like this:
+
+```toml
+[accounts.work]
+default = true
+email = "you@example.com"
+display-name = "Vault Dweller"
+imap.server = "imaps://imap.example.com:993"
+imap.sasl.plain.username = "you@example.com"
+imap.sasl.plain.password.command = "pass show mail/work"   # or: …password.raw = "…"
+smtp.server = "smtps://smtp.example.com:465"
+smtp.sasl.plain.username = "you@example.com"
+smtp.sasl.plain.password.command = "pass show mail/work"
+```
+
+Gmail and Outlook.com need OAuth 2.0 or an app password; a self-hosted server
+with a self-signed certificate needs `imap.tls.cert = "<path to the PEM>"`. The
+wizard covers all of these, and `himalaya --help` documents every key.
+
+### Let an LLM do the setup
+
+Mail configuration is exactly the kind of fiddly, well-documented task an
+assistant is good at, and the Pip-Boy already gives you one: open the TERM tab,
+start `claude` (or whichever CLI assistant you use) and ask it to set up
+Himalaya for your provider. A prompt that works:
+
+> Install the Himalaya mail CLI on this Windows machine, then create its
+> config for my account you@example.com on Fastmail (IMAP), storing the
+> password through the Windows Credential Manager rather than in the file.
+> Run `himalaya envelope list` at the end to prove it works, and show me the
+> config you wrote with the secret redacted.
+
+The assistant knows the provider's host names and auth quirks, can read
+`himalaya --help` and the error messages, and can iterate until `envelope list`
+prints your inbox — while the secret itself stays in a credential store it
+never has to show you. Once Himalaya works from the command line, the MAIL tab
+needs no further setup; `[mail] account` picks a non-default account and
+`[mail] mailbox` the folder to open first.
+
 ## TERM
 
 **TERM** is a real terminal inside the Pip-Boy: it runs a command — `pwsh` by
