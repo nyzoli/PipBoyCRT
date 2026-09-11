@@ -2,9 +2,6 @@
 //! Lásd `docs/adding-a-module.md`.
 pub mod art;
 pub mod clock;
-// A coordinator registers COMMS in `main.rs`; until then nothing references it.
-#[allow(dead_code)]
-pub mod comms;
 pub mod globe;
 pub mod mail;
 pub mod music;

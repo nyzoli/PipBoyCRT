@@ -1,4 +1,4 @@
-//! COMMS module: who your machine is talking to.
+//! WASTELAND · CONN view: who your machine is talking to.
 //!
 //! The source is the Windows connection table — `GetExtendedTcpTable` for IPv4
 //! and IPv6 (owner PID included) plus `GetExtendedUdpTable` for bound UDP
@@ -13,7 +13,7 @@
 //! code is checked, the tables are plain byte buffers we own, and nothing here
 //! panics on an empty or hostile table.
 
-use crate::module::{Ctx, Module, Notice, Slot};
+use crate::module::{Ctx, Notice};
 use crate::net::reverse_dns;
 use crate::style::Theme;
 use crate::ui::widgets::{bytes, truncate};
@@ -32,6 +32,10 @@ use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
+/// Config section key of this view; it keeps COMMS's own `[comms]` table.
+pub const ID: &str = "comms";
+/// Trailing hint on the title line: `v` swaps in the tab's other view.
+const V_HINT: &str = " · v: LOCAL NET";
 /// Shortest accepted `interval`: a table read plus reverse DNS is not free.
 const MIN_INTERVAL: u64 = 1;
 /// How long a pid → name answer is trusted before sysinfo is asked again.
@@ -63,6 +67,9 @@ const NARROW: u16 = 80;
 #[derive(Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct CommsCfg {
+    /// `false` leaves the CONN view out of WASTELAND entirely: no thread, no
+    /// connection tables, and `v` has nowhere to switch to.
+    pub enabled: bool,
     /// Rescan period in seconds, clamped to at least [`MIN_INTERVAL`].
     pub interval: u64,
     /// Show connections to 127.0.0.1 / ::1 as well (`l` toggles it for a session).
@@ -71,16 +78,18 @@ pub struct CommsCfg {
 
 impl Default for CommsCfg {
     fn default() -> Self {
-        Self { interval: 3, show_loopback: false }
+        Self { enabled: true, interval: 3, show_loopback: false }
     }
 }
 
 // ---- data --------------------------------------------------------------------
 
+/// Only TCP has rows today: the UDP table is read for the bound-socket count
+/// and nothing else, so a UDP variant here would be dead weight until a row
+/// actually carries one.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Proto {
     Tcp,
-    Udp,
 }
 
 /// What identifies a connection across cycles. The detail view binds to this,
@@ -705,7 +714,9 @@ enum Mode {
     Filter(String),
 }
 
-pub struct Comms {
+pub struct ConnView {
+    /// `[comms] enabled`, read in `start`; `false` keeps this view out of the tab.
+    pub enabled: bool,
     cfg: CommsCfg,
     conns: Vec<Conn>,
     listening: usize,
@@ -722,10 +733,11 @@ pub struct Comms {
     tx: Option<Sender<CommsCmd>>,
 }
 
-impl Comms {
+impl ConnView {
     pub fn new() -> Self {
         let cfg = CommsCfg::default();
         Self {
+            enabled: true,
             show_loopback: cfg.show_loopback,
             interval: Duration::from_secs(cfg.interval),
             cfg,
@@ -796,7 +808,7 @@ impl Comms {
             Estats::Unknown => "traffic: \u{2014}",
         };
         let mut head = format!(
-            "COMMS \u{b7} {} connections \u{b7} {} listening \u{b7} \u{2193} {} \u{2191} {} \u{b7} {traffic}",
+            "CONN \u{b7} {} connections \u{b7} {} listening \u{b7} \u{2193} {} \u{2191} {} \u{b7} {traffic}",
             self.conns.len(),
             self.listening,
             rate_line(down),
@@ -808,7 +820,13 @@ impl Comms {
         if self.show_loopback {
             head.push_str(" \u{b7} loopback");
         }
-        Line::from(Span::styled(truncate(&head, width as usize), t.title))
+        let mut spans = vec![Span::styled(truncate(&head, width as usize), t.title)];
+        // The tab's other view, named only when there is room left for it.
+        let used = spans[0].content.chars().count();
+        if (width as usize).saturating_sub(used) >= V_HINT.chars().count() {
+            spans.push(Span::styled(V_HINT, t.frame));
+        }
+        Line::from(spans)
     }
 
     fn name_w(&self, width: u16) -> usize {
@@ -943,7 +961,6 @@ impl Comms {
         let w = area.width as usize;
         let proto = match c.proto {
             Proto::Tcp => "tcp",
-            Proto::Udp => "udp",
         };
         let mut lines = vec![
             Line::from(Span::styled(truncate(&format!("{} {}", c.process, c.remote), w), t.title)),
@@ -997,30 +1014,30 @@ impl Comms {
     }
 }
 
-impl Module for Comms {
-    fn id(&self) -> &'static str {
-        "comms"
-    }
-    fn title(&self) -> &'static str {
-        "COMMS"
-    }
-    fn describe(&self) -> &'static str {
-        "Who your machine talks to: connections by process, remote names, traffic"
-    }
-    fn help(&self) -> &'static str {
+/// The CONN view's half of the [`Module`](crate::module::Module) contract: the
+/// same bodies the trait impl had, as plain methods the `Wasteland` wrapper in
+/// `super` forwards to.
+impl ConnView {
+    pub fn help(&self) -> &'static str {
         match self.mode {
-            Mode::List => "↑/↓ select   enter details   s sort   f filter   l loopback   r refresh   q quit",
-            Mode::Detail(_) => "esc back   s sort   f filter   r refresh   q quit",
+            Mode::List => "v local net   ↑/↓ select   enter details   s sort   f filter   l loopback   r refresh",
+            Mode::Detail(_) => "v local net   esc back   s sort   f filter   r refresh   q quit",
             Mode::Filter(_) => "type to filter · enter keep · esc clear",
         }
     }
 
-    fn start(&mut self, ctx: &Ctx) {
-        self.loading = true;
-        let (cfg, notice) = ctx.config.section::<CommsCfg>(self.id());
+    pub fn start(&mut self, ctx: &Ctx) {
+        let (cfg, notice) = ctx.config.section::<CommsCfg>(ID);
         if let Some(n) = notice {
             let _ = ctx.notify.send(Notice::Footer(n));
         }
+        // Switched off in config: no thread, no table reads, and the tab keeps
+        // `v` to itself.
+        self.enabled = cfg.enabled;
+        if !cfg.enabled {
+            return;
+        }
+        self.loading = true;
         self.cfg = cfg;
         self.cfg.interval = self.cfg.interval.max(MIN_INTERVAL);
         self.interval = Duration::from_secs(self.cfg.interval);
@@ -1033,7 +1050,7 @@ impl Module for Comms {
         std::thread::spawn(move || run(cfg, tx_ev, rx_cmd));
     }
 
-    fn poll(&mut self, ctx: &Ctx) -> usize {
+    pub fn poll(&mut self, ctx: &Ctx) -> usize {
         let mut n = 0;
         let Some(rx) = self.rx.take() else { return 0 };
         while let Ok(ev) = rx.try_recv() {
@@ -1063,13 +1080,13 @@ impl Module for Comms {
         n
     }
 
-    fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> bool {
+    pub fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> bool {
         // Ctrl+C must still quit while the prompt owns every other key.
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return false;
         }
         if let Mode::Filter(input) = &mut self.mode {
-            match Comms::filter_key(input, key.code) {
+            match ConnView::filter_key(input, key.code) {
                 Some(true) => {
                     self.filter = input.clone();
                     self.mode = Mode::List;
@@ -1127,7 +1144,7 @@ impl Module for Comms {
         true
     }
 
-    fn draw(&self, f: &mut Frame, area: Rect, t: Theme) {
+    pub fn draw(&self, f: &mut Frame, area: Rect, t: Theme) {
         self.body_height.set(area.height.saturating_sub(2));
         match self.mode {
             Mode::Detail(key) => match self.find(key) {
@@ -1138,15 +1155,10 @@ impl Module for Comms {
         }
     }
 
-    fn overview(&self, width: u16, height: u16, t: Theme) -> Vec<Line<'static>> {
+    /// The one line CONN gets in WASTELAND's OVERVIEW block, under LOCAL NET's.
+    pub fn summary_line(&self, width: u16) -> Line<'static> {
         let w = (width as usize).saturating_sub(1);
-        let mut lines = vec![
-            Line::from(Span::styled(" COMMS", t.title)),
-            Line::from(truncate(
-                &format!(" {} connections \u{b7} {} processes", self.conns.len(), self.processes()),
-                w,
-            )),
-        ];
+        let mut s = format!(" {} connections \u{b7} {} processes", self.conns.len(), self.processes());
         let top = self
             .conns
             .iter()
@@ -1155,20 +1167,12 @@ impl Module for Comms {
             .or_else(|| self.conns.iter().find(|c| c.state == "ESTABLISHED"));
         if let Some(c) = top {
             let name = c.name.clone().unwrap_or_else(|| c.remote.ip().to_string());
-            lines.push(Line::from(truncate(
-                &format!(" {} \u{2192} {} {}", c.process, name, port_label(c.remote.port())),
-                w,
-            )));
+            s.push_str(&format!(" \u{b7} top {} \u{2192} {}", c.process, name));
         }
-        lines.truncate(height.max(1) as usize);
-        lines
+        Line::from(truncate(&s, w))
     }
 
-    fn overview_slot(&self) -> Slot {
-        Slot::Left(6)
-    }
-
-    fn status(&self) -> String {
+    pub fn status(&self) -> String {
         format!(
             "comms {} conns, {} procs, estats={}",
             self.conns.len(),
@@ -1400,8 +1404,8 @@ mod tests {
             .collect()
     }
 
-    fn loaded() -> Comms {
-        let mut m = Comms::new();
+    fn loaded() -> ConnView {
+        let mut m = ConnView::new();
         m.conns = vec![
             conn("chrome", "142.250.185.78", 443, "ESTABLISHED", Some(120_000)),
             conn("chrome", "142.250.185.99", 443, "TIME_WAIT", None),
@@ -1587,14 +1591,12 @@ mod tests {
         let t = Theme::new(ThemeKind::Color);
         let m = loaded();
         let title = plain(&m.title_line(200, t));
-        assert!(title.starts_with("COMMS · 4 connections · 12 listening · ↓ "), "{title}");
+        assert!(title.starts_with("CONN · 4 connections · 12 listening · ↓ "), "{title}");
         assert!(title.contains("traffic: ok"), "{title}");
-        let ov = m.overview(40, 3, t);
-        assert_eq!(plain(&ov[0]).trim(), "COMMS");
-        assert_eq!(plain(&ov[1]).trim(), "4 connections · 3 processes");
-        assert!(plain(&ov[2]).contains("chrome → chrome.example.net 443 https"), "{:?}", plain(&ov[2]));
-        assert_eq!(m.overview(40, 1, t).len(), 1);
-        assert_eq!(m.overview_slot(), Slot::Left(6));
+        assert!(title.ends_with(" · v: LOCAL NET"), "the other view of the tab is named: {title}");
+        let sum = plain(&m.summary_line(200));
+        assert_eq!(sum.trim(), "4 connections · 3 processes · top chrome → chrome.example.net");
+        assert!(plain(&m.summary_line(20)).chars().count() <= 19, "the summary is cut to the block width");
         assert_eq!(m.status(), "comms 4 conns, 3 procs, estats=ok");
 
         let mut denied = loaded();
@@ -1606,7 +1608,7 @@ mod tests {
     #[test]
     fn draws_loading_list_detail_and_filter() {
         let t = Theme::new(ThemeKind::Color);
-        let mut m = Comms::new();
+        let mut m = ConnView::new();
         m.loading = true;
         let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
         term.draw(|f| m.draw(f, f.area(), t)).unwrap();
@@ -1671,7 +1673,7 @@ mod tests {
         assert!(s.contains("PORT") && !s.contains("STATE"), "{s}");
 
         // Empty, with no data at all.
-        let empty = Comms::new();
+        let empty = ConnView::new();
         let mut term = Terminal::new(TestBackend::new(40, 12)).unwrap();
         term.draw(|f| empty.draw(f, f.area(), t)).unwrap();
         assert!(screen(&term, 40, 12).contains("no connections"));
