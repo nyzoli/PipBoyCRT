@@ -14,3 +14,4 @@ pub mod syslog;
 pub mod term;
 pub mod weather;
 pub mod wifi;
+pub mod wasteland;
