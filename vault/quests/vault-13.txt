@@ -1,0 +1,93 @@
+# Vault 13: The Water Chip Requisition
+
+[1]
+The Overseer's memo blinks on your terminal at 06:00 sharp. The water
+recycler has developed what Maintenance calls "a character flaw" and what
+everyone else calls a flood. You are to requisition a replacement chip.
+Form 13-B is attached. All nine pages of it.
+
+You pull on your jumpsuit. The corridor smells of ozone and yesterday's
+noodles.
+
+-> 2 Report to the Overseer first, as procedure demands
+-> 3 Go straight to the Maintenance level and see the damage yourself
+
+[2]
+The Overseer's office is exactly as warm as his welcome. He explains, at
+length, that the vault has survived two hundred years on procedure, and
+that procedure begins with the correct form. He stamps Form 13-B twice,
+then stamps the stamp.
+
+You leave with an authorisation slip and a faint headache.
+
+Record the Authorisation Slip on your Action Chart.
+
+-> 3 Take the lift down to Maintenance
+-> 4 Detour past the storeroom while the slip is still warm
+
+[3]
+Maintenance level is ankle deep and rising. A supervisor in waders points
+at a hatch marked DO NOT ENTER, then at you, then back at the hatch, in
+the universal gesture for promotion.
+
+Beyond the hatch something skitters.
+
+-> 5 Open the hatch
+-> 4 Visit the storeroom for a proper tool first
+
+[4]
+The storeroom clerk has been asleep since the Great Inventory. He wakes
+long enough to slide a crate across the counter and go back to sleep.
+Inside: one Pipe Wrench, one tin of Iguana-on-a-Stick, and a laminated
+card reading TOOL RETURN IS MANDATORY.
+
+Record the Pipe Wrench and one Meal on your Action Chart.
+
+-> 5 Head for the hatch
+
+[5]
+The hatch opens onto the coolant crawlspace. Your lamp finds two eyes,
+then the rest of the rad roach attached to them. It is the size of a
+footstool and twice as confident.
+
+!combat Rad Roach 9 12
+
+If you would rather not test the wrench, you may evade into the crawlspace
+and keep going.
+
+-> 6 If you win the fight, or evade, crawl on
+-> 8 If you retreat to the corridor instead
+
+[6]
+Past the crawlspace is the spare parts locker, sealed since 2161. The
+keypad wants four digits. Above it someone has helpfully scratched
+"THE YEAR WE ALL AGREED NOT TO TALK ABOUT".
+
+Pick a number from the Random Number Table.
+
+-> 7 If you pick 0-4, the panel accepts it
+-> 8 If you pick 5-9, the panel does not
+
+[7]
+The locker holds a water chip in its original packaging, complete with a
+cheerful sticker: VAULT-TEC — TOMORROW, TODAY, PROBABLY.
+
+Record the Water Chip as a Special Item.
+
+-> 9 Carry it back up to Maintenance
+
+[8]
+You climb back to the corridor with nothing but wet boots. The supervisor
+looks at you the way supervisors do. There is, he admits, a second locker.
+There is always a second locker.
+
+-> 6 Try the keypad again
+
+[9]
+The recycler swallows the chip and hums a note it has not managed in
+decades. The water level drops. Somewhere above you, the Overseer is
+already drafting a memo about the correct procedure for gratitude.
+
+Vault 13 is dry. You have earned your noodles.
+
+THE END

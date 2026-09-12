@@ -262,3 +262,14 @@ history = 30              # days of log kept for the 7-day sparkline
 enabled = true
 interval = 3
 show_loopback = false
+
+# QUEST: gamebooks. `dir` holds your own *.txt gamebooks, the save file and the
+# Lone Wolf books you download (under lw\<code>\); a relative path resolves next
+# to the executable. No book text ships with the app: `d` in the library
+# downloads a book from projectaon.org for your own personal use only
+# (Lone Wolf (c) Joe Dever, Internet Edition by Project Aon,
+# https://www.projectaon.org/en/Main/License). `books` adds Lone Wolf books the
+# built-in list (01fftd..05sots) does not know: "Title|code|sections".
+[quest]
+dir = "vault/quests"
+books = []

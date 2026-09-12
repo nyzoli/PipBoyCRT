@@ -54,6 +54,7 @@ fn main() -> anyhow::Result<()> {
         Box::new(modules::notes::Notes::new()),
         Box::new(modules::syslog::Syslog::new()),
         Box::new(modules::art::Art::new()),
+        Box::new(modules::quest::Quest::new()),
         Box::new(modules::globe::Globe::new()),
         Box::new(modules::term::Term::new()),
     ];

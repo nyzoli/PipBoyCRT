@@ -42,6 +42,7 @@ rather than operated.
 | **NOTES** | Sticky notes in `notes.md` with a Notepad-like editor |
 | **SYSLOG** | The last 24 hours of Windows event-log errors and warnings, with details |
 | **ART** | A holotape gallery: ANSI art from the 16colo.rs archive and ascii.live animations |
+| **QUEST** | A gamebook on a holotape: the Lone Wolf books by Joe Dever, downloaded from [Project Aon](https://www.projectaon.org) for your own personal use (no book text ships with the app), or your own gamebooks in a small plain-text format — Action Chart, Random Number Table and the official combat system included |
 | **GLOBE** | A braille world map with the day/night terminator, your location, the subsolar point and the live ISS |
 | **TERM** | A real terminal inside the Pip-Boy (`pwsh` by default) — run `claude` in it with the shipped Vault-Tec persona |
 | **SETUP** | Switch modules on and off, with a line about each; disabled ones never start |
@@ -242,6 +243,22 @@ rustflags = ["-C", "linker-flavor=ld.lld", "-C", "link-self-contained=yes"]
 | `a` | ART: switch between pictures and ascii.live animations |
 | `Space` | ART: start/stop the animation stream |
 | `PgUp` `PgDn` `←` `→` | ART: scroll a picture larger than the pane (`←` `→` only when it is wider) |
+| `↑` `↓` | QUEST · library: select a book |
+| `Enter` | QUEST · library: open the selected book (downloaded books and your own `.txt` ones) |
+| `d` | QUEST · library: download the selected Lone Wolf book from projectaon.org into `vault\quests\lw\<code>\` |
+| `r` | QUEST · library: rescan the quest folder |
+| `1`–`9` | QUEST · play: take that numbered choice — **the play view keeps the digits**, they do not switch tabs there (`0` still goes to SETUP) |
+| `↑` `↓` `Enter` | QUEST · play: highlight a choice and take it (`PgUp` `PgDn` scroll the section text) |
+| `b` | QUEST · play: step back one section (history, last 50) |
+| `n` | QUEST · play: new game — rolls COMBAT SKILL and ENDURANCE, then the Kai Discipline picker |
+| `r` | QUEST · play: pick from the Random Number Table (a big spinning digit) |
+| `c` | QUEST · play: open the combat panel when the section has a fight (`Enter`/`r` a round, `e` evade, `Esc` close) |
+| `a` | QUEST · play: show/hide the Action Chart (shown by itself from 100 columns) |
+| `Tab` `+` `-` | QUEST · play: select an Action Chart field / raise / lower it |
+| `i` `x` | QUEST · play: write into the selected item slot (`ITEM>` prompt) / clear it |
+| `l` | QUEST · play: reload the last save (every move autosaves anyway) |
+| `m` `?` | QUEST · play: the map page / the rules page (`Esc` back) |
+| `Esc` `Backspace` | QUEST · play: back to the library |
 | `i` | GLOBE: show/hide the ISS trail (its last 30 positions) |
 | `n` | GLOBE: show/hide the night shading and the terminator |
 | `r` | GLOBE: fetch the ISS position now |
@@ -253,7 +270,9 @@ rustflags = ["-C", "linker-flavor=ld.lld", "-C", "link-self-contained=yes"]
 
 When the timer fires the app jumps to CLOCK and any key dismisses the alarm.
 In the NOTES editor almost every key belongs to the editor, so `q` and digits
-type text instead of switching tabs; `Ctrl+C` still quits.
+type text instead of switching tabs; `Ctrl+C` still quits. The QUEST play view
+does the same with `1`–`9`: there they pick a choice, not a tab (use `←` `→` or
+`0` to leave the tab).
 
 NOTES shows a real, blinking terminal cursor: at the end of the typed text
 after `n` (the `TITLE>` prompt), and at the edtui cursor cell while editing a
@@ -409,6 +428,115 @@ stream is also cancelled when you leave the tab, so an idle Pip-Boy costs
 nothing. The list is `[art] animations` in `config.toml`. From 100 columns the
 file (or animation) list gets its own column on the left; narrower, only the
 picture and its name line are shown.
+
+## QUEST
+
+**QUEST** turns the Pip-Boy into a gamebook reader. It plays two kinds of book
+through the same engine — the same play view, the same Action Chart, the same
+dice and combat.
+
+### Lone Wolf, and why the app ships no book text
+
+The [Lone Wolf](https://www.projectaon.org) books were written by **Joe Dever**,
+illustrated by Gary Chalk, and released free of charge by the author; the
+**Internet Edition is by Project Aon**. Their licence allows you to download the
+books **for your own personal use**, but it does **not** allow anyone to
+redistribute them. So PipBoyCRT contains no book text at all: the QUEST library
+lists the books, and *you* press `d` to fetch one onto your own machine, from
+the official site only. The first download shows the licence line in the footer:
+
+> Lone Wolf © Joe Dever, Internet Edition by Project Aon · personal copy only ·
+> <https://www.projectaon.org/en/Main/License>
+
+A download fetches the numbered sections plus the frontmatter (story so far,
+rules, Kai Disciplines, equipment, combat rules, the Combat Results Table, the
+Random Number Table, the Action Chart, the map) — 20 requests in flight, 15 s
+each, 2 MB per page, `User-Agent: PipBoyCRT`. The footer counts
+`downloading 142/350`. Files already on disk are skipped, so an interrupted
+download simply continues where it stopped. The raw `.htm` files are kept in
+`vault\quests\lw\<code>\` next to a parsed `book.json`, so every later load is
+instant and offline.
+
+Five books are known out of the box (`01fftd` *Flight from the Dark*, `02fotw`
+*Fire on the Water*, `03tcok` *The Caverns of Kalte*, `04tcod` *The Chasm of
+Doom* — 350 sections each — and `05sots` *Shadow on the Sand*, 400). More can be
+added in `config.toml` without a rebuild, see [Config](#config).
+
+### Playing
+
+`Enter` opens a book. The section number is the header (`SECTION 141`), the text
+wraps and scrolls, and the choices are listed `1) … 2) …` — press the digit, or
+walk them with `↑` `↓` and press `Enter`. `b` steps back through the last 50
+sections. Every move autosaves to `vault\quests\save.json` (one entry per book,
+written through a temp file and renamed, so a half-written save can never be
+read back); `l` reloads it.
+
+`n` starts a new game: COMBAT SKILL is 10 + a Random Number Table pick,
+ENDURANCE is 20 + a pick, exactly as the book's rules say — then you choose five
+of the ten **Kai Disciplines** (the list is read from the downloaded rules page,
+not shipped). The **Action Chart** sits in its own column from 100 columns wide,
+and `a` toggles it on a narrower terminal: COMBAT SKILL, ENDURANCE, Gold Crowns,
+Meals, two weapon slots, eight Backpack slots, Special Items and your
+Disciplines. `Tab` walks the fields, `+` `-` change a number, `i` writes into the
+selected slot and `x` clears it.
+
+`r` is the **Random Number Table**: a big block-font digit that spins for 0.6 s
+and lands on 0–9 (only that spin asks the shell for 20 fps). `c` opens the
+**combat panel** when the section names an enemy. Combat Ratio is your COMBAT
+SKILL minus the enemy's (+2 if you took **Mindblast**); each round picks a number
+and reads the official Combat Results Table, applying the ENDURANCE losses to
+both sides until one of them reaches 0. `e` evades when the section's own text
+allows it. The panel keeps a round-by-round log.
+
+The Combat Results Table itself is embedded in the app as a constant: it is a
+rules mechanic rather than book text. It was transcribed from `crtneg.png` and
+`crtpos.png` of Project Aon's `crtable.htm`; the ratio-0 column is printed on
+both halves of the table and the two agree, which is the cross-check.
+
+### Your own gamebooks
+
+Drop a `.txt` file in `vault\quests\` and it shows up in the library as a custom
+book. The format is plain text and deliberately tiny:
+
+```text
+# The Sewers of New Reno
+
+[1]
+You are standing at the mouth of the storm drain. It smells like a
+decision you are about to regret.
+
+-> 2 If you climb down
+-> 3 If you walk on and pretend you saw nothing
+
+[2]
+Something moves in the dark.
+
+!combat Mole Rat 11 15
+
+-> 4 If you win the fight
+
+[3]
+You walk on. The smell follows you home.
+
+-> 1 If you change your mind
+
+[4]
+Behind the rat is a crate of Nuka-Cola. Fortune favours the damp.
+
+THE END
+```
+
+* `# Title` — the book's title (anywhere, once).
+* `[42]` on its own line starts section 42; the lines after it are its text,
+  blank lines separate paragraphs.
+* `-> 118 If you attack the guard` — a choice: target section, then the label
+  shown in the choice list.
+* `!combat Giak 12 14` — an enemy with COMBAT SKILL 12 and ENDURANCE 14.
+
+Everything else is just text, so a book with no choices at all still reads
+fine. A small original example ships in
+[`vault/quests/vault-13.txt`](vault/quests/vault-13.txt) — nine sections of
+Vault-Tec paperwork, one rad roach.
 
 ## MAIL and the Himalaya CLI
 
@@ -707,6 +835,18 @@ before they are drawn.
 `[notes] file` is a markdown file where every `# Heading` starts a new note; a
 relative path resolves next to the executable and the file is created on the
 first save.
+
+`[quest] dir` is where QUEST keeps everything: your own `*.txt` gamebooks, the
+`save.json`, and the downloaded Lone Wolf books under `lw\<code>\`. A relative
+path resolves next to the executable (default `vault/quests`). `[quest] books`
+adds Lone Wolf books the built-in list does not know, one `"Title|code|sections"`
+string each — the code is the folder name on projectaon.org:
+
+```toml
+[quest]
+dir = "vault/quests"
+books = ["The Kingdoms of Terror|06tkot|350"]
+```
 
 `[term] command` is spawned in a ConPTY with `TERM=xterm-256color` and the
 current environment; `args` is a plain list. For a real `.exe` that means no

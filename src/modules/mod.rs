@@ -9,6 +9,7 @@ pub mod music;
 pub mod net;
 pub mod news;
 pub mod notes;
+pub mod quest;
 pub mod radio;
 pub mod stat;
 pub mod syslog;
