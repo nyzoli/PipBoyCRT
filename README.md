@@ -118,8 +118,10 @@ Virus & threat protection → Exclusions) or build it yourself with
   only on tabs that move — the radio's VU meter, a running speed test, an
   animation in ART, the terminal in TERM.
 - It writes only next to itself: `config.toml` (the SETUP tab updates the
-  `[shell] disabled` list), `notes.md` (NOTES and the radio's favourite tracks)
-  and `speedtest.log`. No registry, no `%APPDATA%`, no telemetry.
+  `[shell] disabled` list), `notes.md` (NOTES and the radio's favourite tracks),
+  `speedtest.log`, `dosimeter.log` (closed screen-time sessions and breaks) and
+  `wasteland.json` (remembered devices and their names). No registry, no
+  `%APPDATA%`, no telemetry.
 - `q` or `Ctrl+C` quits; `Esc` never does — inside a tab it means "back".
 
 ## Build
@@ -509,7 +511,7 @@ rest = 15         # minutes of prescribed break
 idle = 3          # a gap this long (minutes) closes the session
 quiet = ["22:00-07:00"]     # no Geiger burst inside these windows
 watch_foreground = false    # per-app minutes today (memory only, never logged)
-rest_apps = ["vlc", "mpv"]  # foreground apps that count as rest even with input
+rest_apps = ["vlc", "mpv"]  # foreground apps that count as rest even with input (exact process name, case-insensitive, .exe optional)
 history = 30      # days of dosimeter.log kept for the 7-day sparkline
 
 [news]

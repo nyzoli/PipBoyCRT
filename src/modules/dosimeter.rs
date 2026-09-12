@@ -11,7 +11,7 @@
 use crate::module::{Ctx, Module, Notice, Slot};
 use crate::style::Theme;
 use crate::ui::{anim, bigfont};
-use chrono::{DateTime, Duration as ChronoDur, Local, NaiveDateTime, NaiveTime, Timelike};
+use chrono::{DateTime, Duration as ChronoDur, Local, NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -154,12 +154,18 @@ pub fn app_name(raw: &str) -> String {
     raw.rsplit(['\\', '/']).next().unwrap_or(raw).trim_end_matches(".exe").to_lowercase()
 }
 
-/// Does the foreground app count as rest?
+/// Does the foreground app count as rest? Exact process name, case-insensitive,
+/// `.exe` optional on either side (`app_name` strips it from both).
 pub fn is_rest_app(app: Option<&str>, rest_apps: &[String]) -> bool {
     match app {
         None => false,
-        Some(a) => rest_apps.iter().any(|r| !r.is_empty() && a.contains(&app_name(r))),
+        Some(a) => rest_apps.iter().any(|r| !r.is_empty() && app_name(r).eq_ignore_ascii_case(a)),
     }
+}
+
+/// Local midnight of the day containing `at`.
+fn day_start(at: DateTime<Local>) -> DateTime<Local> {
+    at - ChronoDur::minutes(at.hour() as i64 * 60 + at.minute() as i64) - ChronoDur::seconds(at.second() as i64)
 }
 
 // ── the state machine ────────────────────────────────────────────────────────
@@ -173,6 +179,18 @@ pub struct Engine {
     last_active: DateTime<Local>,
     /// Minutes carried over a break, so a cut-short break keeps the counter.
     held: u32,
+    /// Real (never rewound) start of the currently open screen-time bout, for
+    /// logging — `state`'s `since` may be rewound after a cut-short break so
+    /// the RADS/session counter survives it, but the log must not.
+    real_since: DateTime<Local>,
+    /// End of the last span already appended to `sessions`/the log, so a
+    /// cut-short break's rewound counter can never make `close()` re-log
+    /// minutes that were already logged.
+    logged_until: DateTime<Local>,
+    /// Consecutive samples reporting the workstation locked; a lock is only
+    /// acted on once this reaches 2, since `OpenInputDesktop` can fail for one
+    /// sample during any secure-desktop moment (UAC, Ctrl+Alt+Del).
+    locked_count: u32,
     /// Breaks started today (a cut-short one is never logged).
     pub breaks_today: u32,
     pub snooze_until: Option<DateTime<Local>>,
@@ -187,6 +205,9 @@ impl Engine {
             sessions: Vec::new(),
             last_active: now,
             held: 0,
+            real_since: now,
+            logged_until: now,
+            locked_count: 0,
             breaks_today: 0,
             snooze_until: None,
             last_nag: None,
@@ -195,25 +216,28 @@ impl Engine {
 
     /// One 5 s sample. `idle` = seconds since the last input.
     pub fn step(&mut self, at: DateTime<Local>, idle: u64, locked: bool, rest_app: bool) -> Vec<Event> {
+        self.locked_count = if locked { self.locked_count + 1 } else { 0 };
+        let locked = self.locked_count >= 2;
         let gap = idle >= (self.cfg.idle.max(1) as u64) * 60;
         let input = !gap && !locked && !rest_app;
         let mut ev = Vec::new();
         match self.state {
             State::Away => {
                 if input {
+                    self.real_since = at;
                     self.state = State::Active { since: at };
                 }
             }
-            State::Active { since } => {
+            State::Active { .. } => {
                 if !input {
-                    self.close(since, false, self.last_active);
+                    self.close(false, self.last_active);
                     self.state = State::Away;
                 }
             }
             State::Overdue { since } => {
                 if !input {
                     self.held = minutes(since, self.last_active);
-                    self.close(since, false, self.last_active);
+                    self.close(false, self.last_active);
                     self.breaks_today += 1;
                     self.state = State::Resting { since: at, needed: self.cfg.rest };
                 }
@@ -226,10 +250,15 @@ impl Engine {
                     self.last_nag = None;
                     ev.push(Event::RestDone);
                     self.state = if input { State::Active { since: at } } else { State::Away };
+                    if input {
+                        self.real_since = at;
+                    }
                 } else if input {
                     ev.push(Event::BreakCut(done));
                     // The counter survives the cut-short break: rewind the start.
+                    // The log doesn't: `real_since` marks the actual resume.
                     self.state = State::Active { since: at - ChronoDur::minutes(self.held as i64) };
+                    self.real_since = at;
                 }
             }
         }
@@ -245,17 +274,16 @@ impl Engine {
         ev
     }
 
-    /// Close an open screen-time session; sub-minute ones are not logged.
-    fn close(&mut self, since: DateTime<Local>, rest: bool, end: DateTime<Local>) {
-        let m = minutes(since, end);
+    /// Close the open screen-time bout, logging only the part not already
+    /// covered by a previous close (a cut-short break can rewind `state`'s
+    /// `since` for the counter, but never the real, already-logged span).
+    fn close(&mut self, rest: bool, end: DateTime<Local>) {
+        let start = self.real_since.max(self.logged_until);
+        let m = minutes(start, end);
         if m >= 1 {
-            self.sessions.push(Session { start: since, rest, minutes: m });
+            self.sessions.push(Session { start, rest, minutes: m });
         }
-    }
-
-    /// The last closed session, for the log writer.
-    pub fn last_closed(&self) -> Option<Session> {
-        self.sessions.last().copied()
+        self.logged_until = end;
     }
 
     /// Minutes of the running session (a break keeps the held counter).
@@ -327,11 +355,15 @@ impl Engine {
                 longest = longest.max(s.minutes);
             }
         }
-        let open = self.session_min(at);
-        if open > 0 && !matches!(self.state, State::Resting { .. }) {
-            total += open;
-            count += 1;
-            longest = longest.max(open);
+        // An open session spanning midnight counts only the part after 00:00,
+        // to agree with `strip()` and with the per-day filter above.
+        if let State::Active { since } | State::Overdue { since } = self.state {
+            let open = minutes(since.max(day_start(at)), at);
+            if open > 0 {
+                total += open;
+                count += 1;
+                longest = longest.max(open);
+            }
         }
         (total, count, longest, self.breaks_today.max(done), done)
     }
@@ -355,12 +387,19 @@ impl Engine {
     pub fn strip(&self, at: DateTime<Local>) -> [Cell; STRIP] {
         let mut cells = [Cell::Away; STRIP];
         let today = at.date_naive();
+        // A session spanning midnight is clamped to 00:00 so today's total
+        // agrees with `today()`. ponytail: the overdue/active split below then
+        // reads as minutes-since-midnight instead of minutes-since-real-start
+        // for such a session, which can under-color a stretch that was already
+        // overdue before midnight — upgrade if that ever matters in practice.
         let open = match self.state {
             State::Active { since } | State::Overdue { since } => {
-                Some(Session { start: since, rest: false, minutes: minutes(since, at) })
+                let start = since.max(day_start(at));
+                Some(Session { start, rest: false, minutes: minutes(start, at) })
             }
             State::Resting { since, needed: _ } => {
-                Some(Session { start: since, rest: true, minutes: minutes(since, at) })
+                let start = since.max(day_start(at));
+                Some(Session { start, rest: true, minutes: minutes(start, at) })
             }
             State::Away => None,
         };
@@ -525,6 +564,9 @@ pub struct Dosimeter {
     last_idle: u64,
     alerting: bool,
     frame: u32,
+    /// Calendar day of the last sample, to reset `breaks_today`/`apps` once
+    /// at midnight instead of letting them bleed into the new day.
+    day: NaiveDate,
 }
 
 impl Default for Dosimeter {
@@ -545,6 +587,7 @@ impl Dosimeter {
             last_idle: 0,
             alerting: false,
             frame: 0,
+            day: now.date_naive(),
         }
     }
 
@@ -734,6 +777,7 @@ impl Module for Dosimeter {
             .iter()
             .filter(|s| s.rest && s.start.date_naive() == self.now.date_naive())
             .count() as u32;
+        self.day = self.now.date_naive();
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         spawn_signals(tx, watch);
@@ -751,6 +795,12 @@ impl Module for Dosimeter {
             n += 1;
             self.last_idle = s.idle;
             self.now = s.at;
+            let day = s.at.date_naive();
+            if day != self.day {
+                self.day = day;
+                self.eng.breaks_today = 0;
+                self.apps.clear();
+            }
             let rest_app = is_rest_app(s.app.as_deref(), &self.eng.cfg.rest_apps);
             if self.eng.cfg.watch_foreground && s.idle < 60 {
                 if let Some(a) = s.app.as_ref() {
@@ -813,16 +863,20 @@ impl Module for Dosimeter {
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> bool {
+        // `z` must snooze even while alerting, or the Geiger burst just keeps
+        // firing every NAG_MIN minutes with no way to quiet it.
+        if key.code == KeyCode::Char('z') {
+            self.dismiss(ctx);
+            self.eng.snooze(Local::now());
+            let _ = ctx.notify.send(Notice::Footer(format!("snoozed {SNOOZE_MIN} min")));
+            ctx.audio.stop_alarm();
+            return true;
+        }
         if self.alerting {
             self.dismiss(ctx);
             return true;
         }
         match key.code {
-            KeyCode::Char('z') => {
-                self.eng.snooze(Local::now());
-                let _ = ctx.notify.send(Notice::Footer(format!("snoozed {SNOOZE_MIN} min")));
-                ctx.audio.stop_alarm();
-            }
             KeyCode::Char('r') => {
                 self.eng.reset(Local::now());
                 let _ = ctx.notify.send(Notice::Footer("session reset".into()));
@@ -984,9 +1038,11 @@ mod tests {
         e.step(at(9, 2), 100, false, false); // 1 min 40 s idle < 3 min
         assert_eq!(e.state, State::Active { since: at(9, 0) });
         e.step(at(9, 10), 0, false, false);
-        e.step(at(9, 11), 0, true, false); // locked
+        e.step(at(9, 11), 0, true, false); // locked, but a single sample is debounced
+        assert_eq!(e.state, State::Active { since: at(9, 0) }, "one failed OpenInputDesktop sample is ignored");
+        e.step(at(9, 12), 0, true, false); // locked again: two in a row act on it
         assert_eq!(e.state, State::Away);
-        assert_eq!(e.sessions.last().map(|s| s.minutes), Some(10), "session ends at the last input");
+        assert_eq!(e.sessions.last().map(|s| s.minutes), Some(11), "session ends at the last input before the lock");
     }
 
     #[test]
@@ -1000,6 +1056,8 @@ mod tests {
         assert!(!is_rest_app(Some("code"), &["vlc".into()]));
         assert!(!is_rest_app(None, &["vlc".into()]));
         assert!(!is_rest_app(Some("code"), &[]));
+        assert!(!is_rest_app(Some("vlcplayer"), &["vlc".into()]), "exact name only, not a substring");
+        assert!(is_rest_app(Some("vlc"), &["VLC.exe".into()]), "case-insensitive, .exe stripped");
         assert_eq!(app_name("C:\\Program Files\\VideoLAN\\VLC.exe"), "vlc");
         assert_eq!(app_name("mpv.exe"), "mpv");
     }
@@ -1017,6 +1075,24 @@ mod tests {
         assert_eq!(e.breaks_today, 1);
         let (_, _, _, breaks, done) = e.today(at(9, 55));
         assert_eq!((breaks, done), (1, 0), "a cut-short break is not complete");
+    }
+
+    #[test]
+    fn cut_short_break_does_not_double_count_screen_time() {
+        let mut e = engine();
+        e.step(at(9, 0), 0, false, false);
+        run(&mut e, at(9, 0), 45, 0, false); // 9:00-9:45, then Overdue
+        e.step(at(9, 50), 5 * 60, false, false); // walk away: logs 45, break starts at 9:50
+        assert_eq!(e.sessions.last().map(|s| s.minutes), Some(45));
+        // Back after 2 min (cut short); the RADS counter is instantly critical
+        // again (held=45 carries over), but only 4 real minutes follow.
+        let ev = e.step(at(9, 52), 0, false, false);
+        assert_eq!(ev, vec![Event::BreakCut(2), Event::Overdue]);
+        run(&mut e, at(9, 52), 4, 0, false); // active 9:53-9:56
+        e.step(at(10, 1), 5 * 60, false, false); // walk away again
+        let active: Vec<u32> = e.sessions.iter().filter(|s| !s.rest).map(|s| s.minutes).collect();
+        assert_eq!(active, vec![45, 4], "the second bout logs only its own real minutes");
+        assert_eq!(e.today(at(10, 1)).0, 49, "45 + 4, not 94");
     }
 
     #[test]
@@ -1145,5 +1221,33 @@ mod tests {
         let idle = signals::idle_secs();
         assert!(idle < 60 * 60 * 24 * 365, "idle seconds are sane: {idle}");
         let _ = signals::locked();
+    }
+
+    #[test]
+    fn z_snoozes_even_while_alerting() {
+        let (ctx, _rx) = crate::shell::test_ctx(toml::Table::new());
+        let mut d = Dosimeter::new();
+        d.eng.state = State::Overdue { since: at(9, 0) };
+        d.alerting = true;
+        let handled = d.on_key(KeyEvent::from(KeyCode::Char('z')), &ctx);
+        assert!(handled);
+        assert!(!d.alerting, "z dismisses the alert too");
+        assert!(d.eng.snooze_until.is_some(), "z also snoozes, not just silence this once");
+    }
+
+    #[test]
+    fn midnight_resets_breaks_and_apps() {
+        let (ctx, _rx) = crate::shell::test_ctx(toml::Table::new());
+        let mut d = Dosimeter::new();
+        let (tx, rx) = mpsc::channel();
+        d.rx = Some(rx);
+        d.day = at(9, 0).date_naive();
+        d.eng.breaks_today = 3;
+        d.apps.insert("code".into(), 42);
+        let next_day = Local.with_ymd_and_hms(2026, 9, 12, 0, 1, 0).single().unwrap();
+        tx.send(Sample { at: next_day, idle: 0, locked: false, app: None }).unwrap();
+        d.poll(&ctx);
+        assert_eq!(d.eng.breaks_today, 0, "breaks_today resets at midnight");
+        assert!(d.apps.is_empty(), "per-app minutes reset at midnight");
     }
 }
