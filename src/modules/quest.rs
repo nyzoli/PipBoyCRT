@@ -43,24 +43,24 @@ const DICE_SPIN: Duration = Duration::from_millis(600);
 
 /// The hint that lives at the bottom of the Action Chart panel. Two lines
 /// because the chart column is 30 cells wide.
-const SHEET_HINT: &str = " tab next \u{b7} +/- change \u{b7} i add item\n x remove selected \u{b7} esc close";
+const SHEET_HINT: &str = " tab next \u{b7} +/- change \u{b7} i add item\n x remove selected \u{b7} a hide";
 
 /// Shown once at the start of a new game: the Pip-Boy is the dice, the player
 /// is the chart.
 const INTRO: [&str; 6] = [
     "This is a paper gamebook on a holotape.",
     "The book tells you what happens; you keep the",
-    "Action Chart yourself: a opens it, tab picks a",
-    "field, +/- changes it, i adds an item, x removes",
-    "one. The Pip-Boy only rolls the dice and does the",
-    "combat maths. Every move is saved.",
+    "Action Chart yourself: tab picks a field, +/-",
+    "changes it, i adds an item, x removes one (a",
+    "hides or shows the chart). The Pip-Boy only rolls",
+    "the dice and runs the combat. Every move is saved.",
 ];
 
 /// The caption above the spinning digit.
 const DICE_TITLE: &str = "Random Number Table";
 
 /// The same reminder, once per session, on the first section you open.
-const CHART_REMINDER: &str = "\u{25b6} Remember: you keep the chart yourself \u{2014} a opens it";
+const CHART_REMINDER: &str = "\u{25b6} Remember: you keep the chart yourself \u{2014} tab, +/-, i, x edit it";
 
 /// The Lone Wolf books the library knows out of the box: title, Project Aon
 /// code, number of numbered sections. Verified against
@@ -941,7 +941,9 @@ pub struct Quest {
     scroll: u16,
     choice_sel: usize,
     sheet_sel: usize,
-    sheet_on: bool,
+    /// `a` flips the Action Chart against its default: shown by itself from
+    /// 100 columns, hidden below that. Editing (tab, +/-, i, x) never needs it.
+    sheet_toggle: bool,
     page_key: &'static str,
     modal: Option<Modal>,
     /// What this section visit still owes: a fight or a number. Until it is
@@ -983,7 +985,7 @@ impl Quest {
             scroll: 0,
             choice_sel: 0,
             sheet_sel: 0,
-            sheet_on: false,
+            sheet_toggle: false,
             page_key: "gamerulz",
             modal: None,
             pending: None,
@@ -1547,8 +1549,8 @@ what happens, you keep the Action Chart yourself.
 The ▶ line under the text says what to do right now. While a
 fight or a roll is owed, the choices stay dim and do nothing.
 
-Action Chart: a opens it, tab walks the fields, +/- changes a
-number, i adds an item, x removes one (x twice to confirm).
+Action Chart: tab walks the fields, +/- changes a number,
+i adds an item, x removes one (x twice); a hides or shows it.
 Nothing is written for you: the book says it, you record it.
 
 The books come from Project Aon, downloaded to your own
@@ -1857,7 +1859,7 @@ impl Quest {
                 true
             }
             KeyCode::Char('a') => {
-                self.sheet_on = !self.sheet_on;
+                self.sheet_toggle = !self.sheet_toggle;
                 true
             }
             KeyCode::Tab => {
@@ -1913,10 +1915,8 @@ impl Quest {
                 true
             }
             KeyCode::Esc | KeyCode::Backspace => {
-                // esc closes the Action Chart first, as its hint line promises.
-                if self.sheet_on {
-                    self.sheet_on = false;
-                } else {
+                // esc always leaves the book; `a` is the chart's own switch.
+                {
                     self.view = View::Library;
                     self.scan(ctx);
                 }
@@ -2085,7 +2085,7 @@ impl Quest {
     }
 
     fn draw_play(&self, f: &mut Frame, area: Rect, t: Theme) {
-        let show_sheet = (area.width >= 100 || self.sheet_on) && area.width >= 40;
+        let show_sheet = ((area.width >= 100) != self.sheet_toggle) && area.width >= 40;
         let cols = if show_sheet {
             Layout::horizontal([Constraint::Min(0), Constraint::Length(30)]).split(area)
         } else {
@@ -2801,10 +2801,10 @@ mod tests {
 
     #[test]
     fn the_chart_panel_names_its_sections_and_its_keys() {
-        let mut q = play_quest();
-        q.sheet_on = true;
+        let q = play_quest();
+        // 120 columns: the chart is on by itself; `a` would hide it.
         let s = screen(&q, 120, 40);
-        for want in ["ACTION CHART", "STATS", "WEAPONS", "BACKPACK 0/8", "SPECIAL ITEMS", "KAI DISCIPLINES", "tab next", "esc close"] {
+        for want in ["ACTION CHART", "STATS", "WEAPONS", "BACKPACK 0/8", "SPECIAL ITEMS", "KAI DISCIPLINES", "tab next", "a hide"] {
             assert!(s.contains(want), "missing {want:?} in:\n{s}");
         }
         assert!(s.contains("\u{25b6}COMBAT SKILL"), "the selected field is marked:\n{s}");
@@ -3004,7 +3004,7 @@ mod tests {
 
             let mut q = play_quest();
             term.draw(|f| q.draw(f, f.area(), t)).unwrap();
-            q.sheet_on = true;
+            q.sheet_toggle = true;
             term.draw(|f| q.draw(f, f.area(), t)).unwrap();
             q.modal = Some(Modal::Combat(Combat::new(
                 Enemy { enemy: "Rad Roach".into(), combat_skill: 9, endurance: 12 },

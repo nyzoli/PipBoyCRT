@@ -253,7 +253,7 @@ rustflags = ["-C", "linker-flavor=ld.lld", "-C", "link-self-contained=yes"]
 | `n` | QUEST · play: new game — the `HOW THIS WORKS` panel, then COMBAT SKILL and ENDURANCE are rolled, then the Kai Discipline picker |
 | `r` | QUEST · play: pick from the Random Number Table (a big spinning digit under its caption; the landed number says what it means) |
 | `c` | QUEST · play: open the combat panel when the section has a fight (`Enter`/`r` a round, `e` evade, `Esc` close) |
-| `a` | QUEST · play: show/hide the ACTION CHART (shown by itself from 100 columns; `Esc` closes it before it leaves the book) |
+| `a` | QUEST · play: hide/show the ACTION CHART (it is on by itself from 100 columns; editing with `Tab` `+` `-` `i` `x` never needs `a`) |
 | `Tab` `+` `-` | QUEST · play: move the `▶` marker to the next chart field / raise / lower it |
 | `i` `x` `x` | QUEST · play: write into the selected item slot (`ITEM>` prompt) / remove it, the second `x` confirms |
 | `l` | QUEST · play: reload the last save (every move autosaves anyway) |
