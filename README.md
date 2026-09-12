@@ -111,6 +111,8 @@ Virus & threat protection → Exclusions) or build it yourself with
 
 ### What to expect
 
+- Press `h` on any tab for its manual: what the tab is for and what each of
+  its keys does, without leaving the Pip-Boy.
 - The first frame is up in well under a second; the tabs fill in as their
   sources answer (weather and news in a few seconds, MAIL when Himalaya
   replies). Radio streams start on `Space` or `Enter`.
@@ -169,6 +171,7 @@ rustflags = ["-C", "linker-flavor=ld.lld", "-C", "link-self-contained=yes"]
 
 | Key | Action |
 |---|---|
+| `h` | the manual of the current tab, in a popup — what it does and what every key does (`↑` `↓` scroll it, any other key closes it; TERM while attached and the NOTES editor keep the key) |
 | `←` `→` `Tab` `Shift+Tab` | switch tab |
 | `1`–`9` | jump to OVERVIEW / STAT / WEATHER / RADIO / MUSIC / NET / WIFI / WASTELAND / CLOCK (DOSIMETER, NEWS, MAIL, NOTES, SYSLOG, ART, GLOBE and TERM follow: `←` `→`) |
 | `↑` `↓` `Enter` | RADIO: select / tune station |

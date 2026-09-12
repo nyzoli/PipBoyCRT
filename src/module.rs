@@ -145,6 +145,11 @@ pub trait Module {
     fn describe(&self) -> &'static str {
         ""
     }
+    /// The tab's manual, shown by the shell's `h` overlay: what the tab is and
+    /// what every key does. Plain lines, no markdown, at most 70 chars each.
+    fn manual(&self) -> &'static str {
+        ""
+    }
 
     /// Start background sources. Called once on the UI thread before the first frame.
     fn start(&mut self, _ctx: &Ctx) {}

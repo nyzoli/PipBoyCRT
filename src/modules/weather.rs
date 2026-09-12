@@ -48,6 +48,21 @@ impl Module for Weather {
     fn describe(&self) -> &'static str {
         "Open-Meteo forecast, air quality and pollen for your location"
     }
+    fn manual(&self) -> &'static str {
+        "\
+WEATHER is an Open-Meteo forecast for the coordinates in the
+[weather] section of config.toml: conditions now, air quality
+and pollen with a plain-language verdict, the UV scale, a
+sunrise-to-sunset arc, a 24-hour curve and seven days ahead.
+
+  r     fetch a fresh forecast right now
+  ←/→   change tab            1-9  jump to a tab
+  space play/pause the radio  +/-  volume     m  mute
+
+It refreshes on its own, so r is for the impatient and for
+those who believe that staring harder changes the weather.
+No API key and no account: the sky is still free."
+    }
     fn help(&self) -> &'static str {
         "←/→ tab   r refresh   space play/pause   +/- volume   m mute   q quit"
     }

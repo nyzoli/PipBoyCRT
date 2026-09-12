@@ -82,6 +82,22 @@ impl Module for Clock {
     fn describe(&self) -> &'static str {
         "World clocks, sun and moon, quest timer, big and analog dials"
     }
+    fn manual(&self) -> &'static str {
+        "\
+CLOCK is the timekeeping panel: your local time, world clocks
+from [clock], sun and moon, and a quest timer.
+
+  v     cycle the views: normal, big digital, analog dial
+  enter start or pause the quest timer
+  x     reset it
+  [ ]   give or take 5 minutes
+  1-9   jump to a tab
+
+When the timer runs out the header blinks and a radiation
+alarm goes off; any key on this tab quiets it. Sunrise and
+sunset are borrowed from WEATHER, so they follow the same
+coordinates - no second place to configure, no excuses."
+    }
     fn help(&self) -> &'static str {
         "v view   enter start/pause   x reset   [ ] ±5 min   1-9 tabs   q quit"
     }

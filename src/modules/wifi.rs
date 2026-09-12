@@ -384,6 +384,22 @@ impl Module for Wifi {
     fn describe(&self) -> &'static str {
         "Nearby networks, channel congestion, connect"
     }
+    fn manual(&self) -> &'static str {
+        "\
+WIFI lists the networks in range with band, channel and
+signal, draws channel congestion as bell curves and names the
+quietest channel in each band.
+
+  ↑/↓   pick a network
+  b     switch band: 2.4, 5 or 6 GHz
+  c     connect to the selected network
+  r     rescan now
+
+A secured network opens a PASSWORD> prompt: type it, enter
+connects, esc backs out. While the prompt is up it owns every
+key except ctrl+c. The password goes straight to Windows -
+the Pip-Boy keeps no copy and writes none to disk."
+    }
     fn help(&self) -> &'static str {
         if self.prompt.is_some() {
             "type password · enter connect · esc cancel"

@@ -45,6 +45,9 @@ are short and documented.
 
 ```
 describe()          one English line (at most 70 chars) for the SETUP list
+manual()            the tab's manual, shown by the shell's `h` overlay:
+                    plain lines, at most 70 chars each — what the tab is
+                    and what every one of its keys does
 start(ctx)          once, before the first frame (spawn sources here);
                     a module disabled in SETUP is never started
 poll(ctx) -> n      every frame: drain your channel, publish snapshots
@@ -80,7 +83,10 @@ back: a newer `seq` from another owner means you pause yourself and send one
 `Notice::Footer`. RADIO and MUSIC are the two examples.
 
 Keys reserved by the shell: `←` `→` `Tab` `Shift+Tab` `1`–`9` (tabs), `q`
-`Ctrl+C` (quit). `Esc` is free: use it for "back"/"cancel" inside your tab.
+`Ctrl+C` (quit), `h` (the `manual()` overlay). `Esc` is free: use it for
+"back"/"cancel" inside your tab. A module that owns the whole keyboard (TERM
+while attached, the NOTES editor) simply consumes `h` too and the overlay
+stays shut.
 Global keys owned by existing modules: `Space` `+` `-` `m` (radio). Pick
 tab-local keys freely; document them in `help()`.
 
@@ -110,8 +116,16 @@ impl Hello {
 impl Module for Hello {
     fn id(&self) -> &'static str { "hello" }
     fn title(&self) -> &'static str { "HELLO" }
-    fn help(&self) -> &'static str { "h say hello   1-9 tabs   q quit" }
+    fn help(&self) -> &'static str { "g say hello   1-9 tabs   q quit" }
     fn describe(&self) -> &'static str { "Says hello, and counts how often you asked" }
+    fn manual(&self) -> &'static str { "\
+HELLO greets you and keeps score of how often you asked.
+
+  g     say hello once more
+  1-9   jump to a tab
+
+The greeting itself comes from [hello] greeting in
+config.toml, so it can be as formal as your vault requires." }
 
     fn start(&mut self, ctx: &Ctx) {
         let (cfg, notice) = ctx.config.section::<HelloCfg>(self.id());
@@ -137,7 +151,7 @@ impl Module for Hello {
     }
 
     fn on_key(&mut self, key: KeyEvent, _ctx: &Ctx) -> bool {
-        if key.code == KeyCode::Char('h') { self.presses += 1; return true; }
+        if key.code == KeyCode::Char('g') { self.presses += 1; return true; }
         false
     }
 

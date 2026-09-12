@@ -49,6 +49,26 @@ impl Module for Wasteland {
     fn describe(&self) -> &'static str {
         "Devices on your local network and who your machine talks to"
     }
+    fn manual(&self) -> &'static str {
+        "\
+WASTELAND shows who else is out there. Two views; v swaps
+them (a rename or filter prompt keeps the key, of course).
+
+LOCAL NET - every device on your network, with its name,
+vendor, MAC and when it was last seen. A newcomer is announced.
+  ↑/↓   pick a device       enter  details
+  n     rename it (the name sticks to the MAC, not the IP)
+  s     ping sweep on and off for this session
+  r     rescan now          p      ping it once, in details
+
+CONN - the connections your machine has open, by process.
+  ↑/↓   pick a row          enter  details
+  s     sort by process, remote or traffic
+  f     filter              l      show or hide loopback
+  r     re-read the table now
+
+Know your neighbours. First rule of the wasteland."
+    }
     fn help(&self) -> &'static str {
         match self.view {
             View::Local => self.local.help(),

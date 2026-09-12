@@ -493,6 +493,23 @@ impl Module for Notes {
     fn describe(&self) -> &'static str {
         "Sticky notes in notes.md with a built-in editor"
     }
+    fn manual(&self) -> &'static str {
+        "\
+NOTES keeps sticky notes in notes.md next to the exe - plain
+markdown you can open in any editor, no database in sight.
+
+  ↑/↓   pick a note      PgUp/PgDn  scroll its body
+  e     edit the selected note
+  n     new note: type a title, enter creates it
+  d     delete - press d again to confirm, any key cancels
+  r     reload from disk
+
+In the editor typing inserts, the arrows move, ctrl+s saves
+and esc saves and returns to the list. While it is open it
+owns every key except ctrl+c, so q types a q.
+
+RADIO's * files tracks in here too, under \"Favorite tracks\"."
+    }
     fn help(&self) -> &'static str {
         match &self.mode {
             Mode::View { .. } => "↑/↓ note   e edit   n new   d delete   r reload   1-9 tabs   q quit",

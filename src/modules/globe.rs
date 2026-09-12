@@ -227,6 +227,21 @@ impl Module for Globe {
     fn describe(&self) -> &'static str {
         "World map with day/night, your location and the ISS"
     }
+    fn manual(&self) -> &'static str {
+        "\
+GLOBE is a braille world map with the day/night terminator,
+the subsolar point, your location from [weather] and the
+International Space Station exactly where it is right now.
+
+  i     show or hide the ISS trail, its last 30 positions
+  n     show or hide the night shading and the terminator
+  r     fetch the ISS position now
+  1-9   jump to a tab
+
+The position comes from a public API and updates on its own,
+so r is only for when you cannot wait. Waving at the station
+is permitted; being seen back is not part of the contract."
+    }
     fn help(&self) -> &'static str {
         "i ISS trail   n night shading   r refresh ISS   1-9 tabs   q quit"
     }
