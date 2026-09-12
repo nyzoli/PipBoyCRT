@@ -1,6 +1,6 @@
 [package]
 name = "pipboy"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "A Fallout Pip-Boy style terminal dashboard for Windows, built for cool-retro-term"
 license = "MIT"
