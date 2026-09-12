@@ -18,8 +18,10 @@ use ratatui::Frame;
 use serde::de::DeserializeOwned;
 use std::any::Any;
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
+use std::time::Instant;
 
 /// Where a module's compact block goes on the OVERVIEW tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,6 +88,32 @@ pub fn next_focus_seq() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(1);
     SEQ.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Blackboard key of the [`ConnSnapshot`] WASTELAND publishes after every
+/// connection-table scan; [`CONNECTIONS_AT`] holds its `taken` alone, the
+/// cheap change key a consumer compares before cloning the snapshot.
+pub const CONNECTIONS: &str = "wasteland.connections";
+pub const CONNECTIONS_AT: &str = "wasteland.connections.at";
+
+/// Where this machine's open connections go: one entry per public remote
+/// address (private, link-local and loopback ones never make it here).
+/// GLOBE turns these into arcs without knowing who produced them.
+#[derive(Clone, Debug)]
+pub struct ConnSnapshot {
+    pub taken: Instant,
+    pub remotes: Vec<RemoteConn>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteConn {
+    pub ip: IpAddr,
+    /// Any connection to this address is ESTABLISHED.
+    pub established: bool,
+    /// Busiest connection to this address, in + out bytes per second.
+    pub rate: u64,
+    /// Process owning that busiest connection.
+    pub process: String,
 }
 
 /// The raw `config.toml` table; each module reads its own section by id.

@@ -13,7 +13,7 @@
 //! code is checked, the tables are plain byte buffers we own, and nothing here
 //! panics on an empty or hostile table.
 
-use crate::module::{Ctx, Notice};
+use crate::module::{ConnSnapshot, Ctx, Notice, RemoteConn, CONNECTIONS, CONNECTIONS_AT};
 use crate::net::reverse_dns;
 use crate::style::Theme;
 use crate::ui::widgets::{bytes, truncate};
@@ -262,6 +262,34 @@ pub fn is_private(ip: IpAddr) -> bool {
             v6.is_unspecified() || (s[0] & 0xfe00) == 0xfc00 || (s[0] & 0xffc0) == 0xfe80
         }
     }
+}
+
+/// What GLOBE gets to see: the public remote addresses, one entry each. A
+/// remote with several connections keeps its busiest one's rate and process
+/// and counts as ESTABLISHED when any of them is.
+pub fn remote_snapshot(conns: &[Conn], taken: Instant) -> ConnSnapshot {
+    let mut by_ip: BTreeMap<IpAddr, RemoteConn> = BTreeMap::new();
+    for c in conns {
+        let ip = c.remote.ip();
+        if is_loopback(ip) || is_private(ip) {
+            continue;
+        }
+        let rate = c.rate_in.unwrap_or(0).saturating_add(c.rate_out.unwrap_or(0));
+        let established = c.state == "ESTABLISHED";
+        match by_ip.get_mut(&ip) {
+            None => {
+                by_ip.insert(ip, RemoteConn { ip, established, rate, process: c.process.clone() });
+            }
+            Some(r) => {
+                r.established |= established;
+                if rate > r.rate {
+                    r.rate = rate;
+                    r.process = c.process.clone();
+                }
+            }
+        }
+    }
+    ConnSnapshot { taken, remotes: by_ip.into_values().collect() }
 }
 
 /// `LAN` for anything inside the house, empty for the public internet.
@@ -1220,6 +1248,9 @@ impl ConnView {
                     self.conns = s.conns;
                     self.listening = s.listening;
                     self.estats = s.estats;
+                    let snap = remote_snapshot(&self.conns, Instant::now());
+                    ctx.board.publish(CONNECTIONS_AT, snap.taken);
+                    ctx.board.publish(CONNECTIONS, snap);
                     // The open detail view's connection can close between
                     // cycles — fall back to the list rather than show a ghost.
                     if let Mode::Detail(key) = self.mode {
@@ -1613,6 +1644,24 @@ mod tests {
         assert_eq!(port_label(51234), "51234");
         // Sorted-by-port table, so a duplicate or a typo shows up here.
         assert!(SERVICES.windows(2).all(|w| w[0].0 <= w[1].0), "keep SERVICES sorted by port");
+    }
+
+    #[test]
+    fn snapshot_keeps_public_remotes_once_each() {
+        let mut m = loaded();
+        m.conns.push(conn("chrome", "142.250.185.78", 8443, "CLOSE_WAIT", Some(500_000)));
+        m.conns.push(conn("x", "127.0.0.1", 80, "ESTABLISHED", Some(1)));
+        m.conns.push(conn("x", "fe80::1", 80, "ESTABLISHED", Some(1)));
+        let snap = remote_snapshot(&m.conns, Instant::now());
+        let ips: Vec<String> = snap.remotes.iter().map(|r| r.ip.to_string()).collect();
+        assert_eq!(ips, ["142.250.185.78", "142.250.185.99", "203.0.113.7"], "no LAN, loopback or link-local; one per ip");
+        let g = &snap.remotes[0];
+        assert!(g.established, "any ESTABLISHED connection counts");
+        assert_eq!(g.rate, 750_000, "the busiest connection's in+out");
+        assert_eq!(g.process, "chrome");
+        assert!(!snap.remotes[1].established);
+        assert_eq!(snap.remotes[1].rate, 0, "no counters → 0");
+        assert!(remote_snapshot(&[], Instant::now()).remotes.is_empty());
     }
 
     #[test]

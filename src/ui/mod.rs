@@ -3,6 +3,7 @@ pub mod anim;
 pub mod analog;
 pub mod bigfont;
 pub mod clock;
+pub mod countries;
 pub mod landmask;
 pub mod net;
 pub mod oui_table;
