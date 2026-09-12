@@ -1,27 +1,38 @@
 #!/usr/bin/env python3
-"""Generate src/ui/oui_table.rs from the IEEE MA-L (OUI) registry.
+"""Generate src/ui/oui.bin from the IEEE MA-L (OUI) registry.
 
 Data: IEEE Registration Authority, https://standards-oui.ieee.org/oui/oui.csv
 (the Wireshark `manuf` list is the fallback if the IEEE site refuses the
-request). Run once; the generated file is committed.
+request; the Rust table already committed at OLD_RUST is the last-resort
+fallback if neither network source is reachable). Run once; the output blob
+is committed and loaded by `src/ui/oui_table.rs` via `include_bytes!`.
 
     python tools/gen_oui.py
 
-The output is three parallel statics — a sorted &[u32] of 24-bit prefixes, a
-&[u16] index into a deduplicated &[&str] vendor table — plus a binary-search
-`vendor()`. Roughly 35k prefixes, a few hundred KB of source.
+Blob format (little-endian), read by `oui_table.rs`:
+    b"OUI1"                              4-byte magic
+    u32 n_prefixes, u32 n_vendors        header counts
+    n_prefixes x u32                     sorted 24-bit OUI prefixes
+    n_prefixes x u16                     vendor index, parallel to the above
+    u32 total_len                        byte length of the string table
+    total_len bytes                      UTF-8 vendor names, concatenated
+    n_vendors x u32                      start offset of each name in the
+                                          string table (end = next start, or
+                                          total_len for the last vendor)
 """
 import csv
 import io
 import os
 import re
+import struct
 import sys
 import urllib.request
 from datetime import date
 
 IEEE = "https://standards-oui.ieee.org/oui/oui.csv"
 WIRESHARK = "https://raw.githubusercontent.com/wireshark/wireshark/master/manuf"
-OUT = os.path.join(os.path.dirname(__file__), "..", "src", "ui", "oui_table.rs")
+OLD_RUST = os.path.join(os.path.dirname(__file__), "..", "src", "ui", "oui_table.rs")
+OUT = os.path.join(os.path.dirname(__file__), "..", "src", "ui", "oui.bin")
 MAX_LEN = 24
 UA = {"User-Agent": "Mozilla/5.0 (pipboy oui table generator)"}
 
@@ -68,6 +79,24 @@ def from_wireshark(text):
             yield hexs, org
 
 
+def from_old_rust(path):
+    """Last-resort fallback: parse the array literals of a previously
+    generated oui_table.rs so a machine with no network access can still
+    rebuild the blob from data already committed."""
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    prefixes = [int(x, 16) for x in re.findall(r"0x([0-9a-fA-F]{6}),", text.split("VENDOR_IDX", 1)[0])]
+    rest = text.split("VENDOR_IDX", 1)[1]
+    idx_block, vendors_block = rest.split("VENDORS", 1)
+    idx = [int(x) for x in re.findall(r"(\d+),", idx_block.split("&[", 1)[1].split("];", 1)[0])]
+    names = re.findall(r'"((?:[^"\\]|\\.)*)"', vendors_block)
+    names = [n.replace('\\"', '"').replace("\\\\", "\\") for n in names]
+    if not (prefixes and len(prefixes) == len(idx) and names):
+        raise ValueError("could not parse old oui_table.rs")
+    for hexs_int, vendor_i in zip(prefixes, idx):
+        yield f"{hexs_int:06X}", names[vendor_i]
+
+
 def titlecase(word):
     """Title-case a word, leaving short all-caps acronyms (HP, AVM) alone."""
     return "-".join(
@@ -94,14 +123,19 @@ def normalise(org):
 
 def main():
     table, source = {}, None
-    for url, parse in ((IEEE, from_ieee), (WIRESHARK, from_wireshark)):
+    for label, parse, arg in (
+        (IEEE, from_ieee, IEEE),
+        (WIRESHARK, from_wireshark, WIRESHARK),
+        (f"old table ({OLD_RUST})", from_old_rust, OLD_RUST),
+    ):
         try:
-            rows = list(parse(fetch(url)))
+            get = fetch(arg) if arg.startswith("http") else arg
+            rows = list(parse(get))
         except Exception as e:  # noqa: BLE001 - any failure means "try the next one"
-            print(f"{url}: {e}", file=sys.stderr)
+            print(f"{label}: {e}", file=sys.stderr)
             continue
         if len(rows) > 1000:
-            table, source = dict(rows), url
+            table, source = dict(rows), label
             break
     if not table:
         sys.exit("no usable OUI source")
@@ -118,46 +152,31 @@ def main():
     if len(vendors) > 0xFFFF:
         sys.exit(f"{len(vendors)} vendors do not fit a u16 index")
 
-    def quoted(v):
-        return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '",'
+    names_bytes = [v.encode("utf-8") for v in vendors]
+    offsets, pos = [], 0
+    for nb in names_bytes:
+        offsets.append(pos)
+        pos += len(nb)
+    strings_blob = b"".join(names_bytes)
 
-    def block(values, fmt, per_line):
-        out = []
-        for i in range(0, len(values), per_line):
-            out.append("    " + " ".join(fmt(v) for v in values[i:i + per_line]))
-        return "\n".join(out)
+    out = bytearray()
+    out += b"OUI1"
+    out += struct.pack("<II", len(prefixes), len(vendors))
+    for p, _ in prefixes:
+        out += struct.pack("<I", p)
+    for _, i in prefixes:
+        out += struct.pack("<H", i)
+    out += struct.pack("<I", len(strings_blob))
+    out += strings_blob
+    for off in offsets:
+        out += struct.pack("<I", off)
 
-    with open(OUT, "w", encoding="utf-8", newline="\n") as f:
-        f.write(f'''//! IEEE OUI vendor table — generated by `tools/gen_oui.py`, do not edit by hand.
-//!
-//! Source: {source}
-//! (IEEE Registration Authority, MA-L assignments), retrieved {date.today()}.
-//! {len(prefixes)} prefixes, {len(vendors)} vendor names. Vendor names are
-//! normalised: corporate suffixes dropped, title-cased, {MAX_LEN} characters at most.
-
-/// Sorted 24-bit OUI prefixes; `VENDOR_IDX[i]` names `PREFIXES[i]`.
-static PREFIXES: &[u32] = &[
-{block([p for p, _ in prefixes], lambda v: f"0x{v:06x},", 10)}
-];
-
-/// Index into [`VENDORS`], parallel to [`PREFIXES`].
-static VENDOR_IDX: &[u16] = &[
-{block([i for _, i in prefixes], lambda v: f"{v},", 16)}
-];
-
-/// Deduplicated vendor names.
-static VENDORS: &[&str] = &[
-{block(vendors, quoted, 4)}
-];
-
-/// The vendor that owns a MAC, matched on its first three bytes.
-pub fn vendor(mac: &[u8; 6]) -> Option<&'static str> {{
-    let prefix = u32::from_be_bytes([0, mac[0], mac[1], mac[2]]);
-    let i = PREFIXES.binary_search(&prefix).ok()?;
-    VENDORS.get(*VENDOR_IDX.get(i)? as usize).copied()
-}}
-''')
-    print(f"{OUT}: {len(prefixes)} prefixes, {len(vendors)} vendors, from {source}")
+    with open(OUT, "wb") as f:
+        f.write(out)
+    print(
+        f"{OUT}: {len(prefixes)} prefixes, {len(vendors)} vendors, "
+        f"{len(out)} bytes, from {source}, retrieved {date.today()}"
+    )
 
 
 if __name__ == "__main__":
