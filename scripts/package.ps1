@@ -6,10 +6,9 @@ cargo build --release
 if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 $stage = Join-Path "dist" "pipboy"
 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force (Join-Path $stage "vault") | Out-Null
 Copy-Item "target/release/pipboy.exe" $stage
 Copy-Item "config.toml" $stage
-Copy-Item "vault/CLAUDE.md" (Join-Path $stage "vault")
+Copy-Item "vault" (Join-Path $stage "vault") -Recurse
 Copy-Item "README.md", "LICENSE" $stage
 $zip = Join-Path "dist" "pipboy-windows-x64.zip"
 Remove-Item $zip -ErrorAction SilentlyContinue

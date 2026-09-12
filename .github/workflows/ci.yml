@@ -21,7 +21,7 @@ jobs:
           path: |
             target/release/pipboy.exe
             config.toml
-            vault/CLAUDE.md
+            vault/**
 
   release:
     needs: build
