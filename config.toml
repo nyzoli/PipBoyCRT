@@ -249,3 +249,16 @@ quiet = ["22:00-07:00"]   # no Geiger burst inside these windows
 watch_foreground = false  # per-app minutes today (memory only, never logged)
 rest_apps = ["vlc", "mpv"]  # foreground apps that count as rest even with input
 history = 30              # days of log kept for the 7-day sparkline
+
+# WASTELAND's CONN view (`v` switches to it): the active connections of this
+# machine, from the Windows TCP/UDP connection table. enabled = false leaves it
+# out of the tab entirely — no thread, no table reads, and `v` does nothing.
+# interval is in seconds, minimum 1. Remote addresses are resolved with reverse
+# DNS (the only thing that leaves the machine here); per-connection traffic
+# comes from TCP ESTATS and needs an elevated pipboy.exe — without it the
+# traffic columns stay "—". show_loopback lists the connections to 127.0.0.1 /
+# ::1 as well (`l` toggles it for the session).
+[comms]
+enabled = true
+interval = 3
+show_loopback = false

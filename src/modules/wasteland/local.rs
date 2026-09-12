@@ -1,4 +1,4 @@
-//! WASTELAND module: the devices on your local network.
+//! WASTELAND · LOCAL NET view: the devices on your local network.
 //!
 //! The source is the Windows IPv4 neighbour (ARP) table, read with
 //! `GetIpNetTable2` on a background thread; an optional ICMP sweep of the local
@@ -13,7 +13,7 @@
 //! code is checked, the table the API allocates is released by a `Drop` guard
 //! (`FreeMibTable`), and nothing here panics on a hostile or empty table.
 
-use crate::module::{Ctx, Module, Notice, Slot};
+use crate::module::{Ctx, Notice, Slot};
 use crate::net::icmp::Pinger;
 use crate::net::parse_ipconfig;
 use crate::style::Theme;
@@ -35,6 +35,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
+/// Config section and blackboard key: this view keeps WASTELAND's own name.
+pub const ID: &str = "wasteland";
+/// Trailing hint on the title line: `v` swaps in the tab's other view.
+const V_HINT: &str = " · v: CONN";
 /// Shortest accepted `interval`: a sweep plus reverse DNS is not free.
 const MIN_INTERVAL: u64 = 20;
 /// The sweep runs on the first scan and every Nth one after that.
@@ -670,7 +674,7 @@ fn run_ipconfig() -> Option<String> {
 fn reverse_dns(ip: Ipv4Addr) -> Option<String> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(ffi::host_name(ip));
+        let _ = tx.send(crate::net::reverse_dns(std::net::IpAddr::V4(ip)));
     });
     rx.recv_timeout(DNS_TIMEOUT).ok().flatten().map(|n| sanitize_name(&n)).filter(|n| !n.is_empty())
 }
@@ -755,7 +759,7 @@ enum Mode {
     Rename { mac: String, input: String },
 }
 
-pub struct Wasteland {
+pub struct LocalNet {
     cfg: WastelandCfg,
     devices: Vec<Device>,
     gateway: Option<String>,
@@ -777,7 +781,7 @@ pub struct Wasteland {
     tx: Option<Sender<WlCmd>>,
 }
 
-impl Wasteland {
+impl LocalNet {
     pub fn new() -> Self {
         let cfg = WastelandCfg::default();
         Self {
@@ -859,7 +863,7 @@ impl Wasteland {
     fn title_line(&self, width: u16, t: Theme) -> Line<'static> {
         let subnet = if self.subnet.is_empty() { "…".to_string() } else { self.subnet.clone() };
         let mut head =
-            format!("WASTELAND · {subnet} · {} online · {} sleeping", self.online(), self.sleeping());
+            format!("LOCAL NET · {subnet} · {} online · {} sleeping", self.online(), self.sleeping());
         if let Some(at) = self.scanned {
             head.push_str(&format!(" · scan {}", at.format("%H:%M")));
         }
@@ -872,6 +876,11 @@ impl Wasteland {
             if rest > 3 {
                 spans.push(Span::styled(truncate(&format!(" · {e}"), rest), t.warn));
             }
+        }
+        // The tab's other view, named only when there is room left for it.
+        let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        if (width as usize).saturating_sub(used) >= V_HINT.chars().count() {
+            spans.push(Span::styled(V_HINT, t.frame));
         }
         Line::from(spans)
     }
@@ -1021,27 +1030,21 @@ impl Wasteland {
     }
 }
 
-impl Module for Wasteland {
-    fn id(&self) -> &'static str {
-        "wasteland"
-    }
-    fn title(&self) -> &'static str {
-        "WASTELAND"
-    }
-    fn describe(&self) -> &'static str {
-        "Devices on your local network: who is home, who is new"
-    }
-    fn help(&self) -> &'static str {
+/// The LOCAL NET view's half of the [`Module`](crate::module::Module) contract:
+/// the same bodies the trait impl had, as plain methods the [`Wasteland`]
+/// wrapper (`super`) forwards to.
+impl LocalNet {
+    pub fn help(&self) -> &'static str {
         match self.mode {
-            Mode::List => "↑/↓ select   enter details   n rename   r rescan   s sweep   1-9 tabs   q quit",
-            Mode::Detail { .. } => "p ping   n rename   esc back   q quit",
+            Mode::List => "v conn   ↑/↓ select   enter details   n rename   r rescan   s sweep   q quit",
+            Mode::Detail { .. } => "v conn   p ping   n rename   esc back   q quit",
             Mode::Rename { .. } => "type a name · enter save · esc cancel",
         }
     }
 
-    fn start(&mut self, ctx: &Ctx) {
+    pub fn start(&mut self, ctx: &Ctx) {
         self.loading = true;
-        let (cfg, notice) = ctx.config.section::<WastelandCfg>(self.id());
+        let (cfg, notice) = ctx.config.section::<WastelandCfg>(ID);
         if let Some(n) = notice {
             let _ = ctx.notify.send(Notice::Footer(n));
         }
@@ -1059,7 +1062,7 @@ impl Module for Wasteland {
         std::thread::spawn(move || run(cfg, path, tx_ev, rx_cmd));
     }
 
-    fn poll(&mut self, ctx: &Ctx) -> usize {
+    pub fn poll(&mut self, ctx: &Ctx) -> usize {
         let mut n = 0;
         let Some(rx) = self.rx.take() else { return 0 };
         while let Ok(ev) = rx.try_recv() {
@@ -1114,14 +1117,14 @@ impl Module for Wasteland {
         self.rx = Some(rx);
         if n > 0 {
             ctx.board.publish(
-                self.id(),
+                ID,
                 WastelandSnapshot { devices: self.devices.clone(), gateway: self.gateway.clone() },
             );
         }
         n
     }
 
-    fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> bool {
+    pub fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> bool {
         // Ctrl+C must still quit while the prompt owns every other key.
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return false;
@@ -1196,7 +1199,7 @@ impl Module for Wasteland {
         true
     }
 
-    fn draw(&self, f: &mut Frame, area: Rect, t: Theme) {
+    pub fn draw(&self, f: &mut Frame, area: Rect, t: Theme) {
         // Looking at the tab is what acknowledges a new device.
         self.new_unseen.set(false);
         self.body_height.set(area.height.saturating_sub(2));
@@ -1209,7 +1212,7 @@ impl Module for Wasteland {
         }
     }
 
-    fn header(&self, width: u16, t: Theme) -> Vec<Span<'static>> {
+    pub fn header(&self, width: u16, t: Theme) -> Vec<Span<'static>> {
         if !self.new_unseen.get() || !self.devices.iter().any(|d| d.is_new) {
             return vec![];
         }
@@ -1220,7 +1223,7 @@ impl Module for Wasteland {
         vec![Span::styled(s, t.warn)]
     }
 
-    fn overview(&self, width: u16, height: u16, t: Theme) -> Vec<Line<'static>> {
+    pub fn overview(&self, width: u16, height: u16, t: Theme) -> Vec<Line<'static>> {
         let w = (width as usize).saturating_sub(1);
         let mut lines = vec![
             Line::from(Span::styled(" WASTELAND", t.title)),
@@ -1239,11 +1242,17 @@ impl Module for Wasteland {
         lines
     }
 
-    fn overview_slot(&self) -> Slot {
+    pub fn overview_slot(&self) -> Slot {
         Slot::Left(5)
     }
 
-    fn status(&self) -> String {
+    /// Test hook: open the rename prompt without a device behind it.
+    #[cfg(test)]
+    pub fn open_rename_for_test(&mut self) {
+        self.mode = Mode::Rename { mac: String::new(), input: String::new() };
+    }
+
+    pub fn status(&self) -> String {
         format!(
             "wasteland {} online, {} known, gateway={}",
             self.online(),
@@ -1525,10 +1534,7 @@ mod ffi {
     use std::net::Ipv4Addr;
     use std::ptr::null_mut;
     use windows_sys::Win32::NetworkManagement::IpHelper::{FreeMibTable, GetIpNetTable2, MIB_IPNET_TABLE2};
-    use windows_sys::Win32::Networking::WinSock::{
-        getnameinfo, NlnsPermanent, NlnsReachable, NlnsStale, WSAStartup, AF_INET, NI_NAMEREQD, SOCKADDR,
-        SOCKADDR_IN, WSADATA,
-    };
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, NlnsPermanent, NlnsReachable, NlnsStale};
 
     /// `ERROR_SUCCESS`.
     const OK: u32 = 0;
@@ -1570,47 +1576,6 @@ mod ffi {
             }
         }
         out
-    }
-
-    /// WinSock must be started before `getnameinfo`; once per process is enough
-    /// and there is nothing to clean up before exit.
-    fn winsock() -> bool {
-        use std::sync::OnceLock;
-        static READY: OnceLock<bool> = OnceLock::new();
-        *READY.get_or_init(|| {
-            let mut data: WSADATA = unsafe { std::mem::zeroed() };
-            unsafe { WSAStartup(0x0202, &mut data) == 0 }
-        })
-    }
-
-    /// Reverse DNS for one address. `NI_NAMEREQD` means "a name or nothing",
-    /// so the IP is never echoed back as its own host name.
-    pub fn host_name(ip: Ipv4Addr) -> Option<String> {
-        if !winsock() {
-            return None;
-        }
-        let mut sa: SOCKADDR_IN = unsafe { std::mem::zeroed() };
-        sa.sin_family = AF_INET;
-        // Network byte order, the same way `Pinger` hands an address over.
-        sa.sin_addr.S_un.S_addr = u32::from_ne_bytes(ip.octets());
-        let mut host = [0u8; 256];
-        let code = unsafe {
-            getnameinfo(
-                std::ptr::from_ref(&sa).cast::<SOCKADDR>(),
-                std::mem::size_of::<SOCKADDR_IN>() as i32,
-                host.as_mut_ptr(),
-                host.len() as u32,
-                std::ptr::null_mut(),
-                0,
-                NI_NAMEREQD as i32,
-            )
-        };
-        if code != 0 {
-            return None;
-        }
-        let end = host.iter().position(|&b| b == 0).unwrap_or(host.len());
-        let name = String::from_utf8_lossy(&host[..end]).into_owned();
-        (!name.is_empty()).then_some(name)
     }
 }
 
@@ -1847,24 +1812,24 @@ mod tests {
     #[test]
     fn rename_prompt_state_machine() {
         let mut input = String::new();
-        assert_eq!(Wasteland::rename_key(&mut input, KeyCode::Char('n')), None);
-        assert_eq!(Wasteland::rename_key(&mut input, KeyCode::Char('a')), None);
-        assert_eq!(Wasteland::rename_key(&mut input, KeyCode::Char('s')), None);
+        assert_eq!(LocalNet::rename_key(&mut input, KeyCode::Char('n')), None);
+        assert_eq!(LocalNet::rename_key(&mut input, KeyCode::Char('a')), None);
+        assert_eq!(LocalNet::rename_key(&mut input, KeyCode::Char('s')), None);
         assert_eq!(input, "nas");
-        assert_eq!(Wasteland::rename_key(&mut input, KeyCode::Backspace), None);
+        assert_eq!(LocalNet::rename_key(&mut input, KeyCode::Backspace), None);
         assert_eq!(input, "na");
-        assert_eq!(Wasteland::rename_key(&mut input, KeyCode::Up), None, "arrows are ignored, not typed");
-        assert_eq!(Wasteland::rename_key(&mut input, KeyCode::Esc), Some(false));
-        assert_eq!(Wasteland::rename_key(&mut input, KeyCode::Enter), Some(true));
+        assert_eq!(LocalNet::rename_key(&mut input, KeyCode::Up), None, "arrows are ignored, not typed");
+        assert_eq!(LocalNet::rename_key(&mut input, KeyCode::Esc), Some(false));
+        assert_eq!(LocalNet::rename_key(&mut input, KeyCode::Enter), Some(true));
         let mut long = "x".repeat(MAX_NAME);
-        Wasteland::rename_key(&mut long, KeyCode::Char('y'));
+        LocalNet::rename_key(&mut long, KeyCode::Char('y'));
         assert_eq!(long.chars().count(), MAX_NAME, "capped");
     }
 
     #[test]
     fn rename_mode_round_trip_through_on_key() {
         let (ctx, _rx) = crate::shell::test_ctx(toml::Table::new());
-        let mut m = Wasteland::new();
+        let mut m = LocalNet::new();
         m.devices = vec![dev([192, 168, 1, 9], true)];
         assert!(m.on_key(KeyEvent::from(KeyCode::Char('n')), &ctx));
         assert_eq!(m.mode, Mode::Rename { mac: mac_string(&MAC), input: "pi-hole".into() });
@@ -1894,7 +1859,7 @@ mod tests {
     fn rename_commits_by_mac_even_after_the_list_is_re_sorted() {
         let (ctx, _rx) = crate::shell::test_ctx(toml::Table::new());
         const MAC_B: [u8; 6] = [0x24, 0x0a, 0xc4, 0xaa, 0xbb, 0xcc];
-        let mut m = Wasteland::new();
+        let mut m = LocalNet::new();
         m.devices = vec![dev_mac([192, 168, 1, 9], true, &MAC), dev_mac([192, 168, 1, 20], true, &MAC_B)];
         m.sel = 0;
         assert!(m.on_key(KeyEvent::from(KeyCode::Char('n')), &ctx));
@@ -1923,7 +1888,7 @@ mod tests {
     #[test]
     fn selection_detail_and_sweep_toggle() {
         let (ctx, rx) = crate::shell::test_ctx(toml::Table::new());
-        let mut m = Wasteland::new();
+        let mut m = LocalNet::new();
         m.move_sel(1);
         assert_eq!(m.sel, 0, "nothing to select yet");
         assert!(!m.on_key(KeyEvent::from(KeyCode::Char('p')), &ctx), "no device to ping");
@@ -1947,7 +1912,7 @@ mod tests {
     fn poll_publishes_a_snapshot_and_announces_new_devices() {
         let (ctx, rx) = crate::shell::test_ctx(toml::Table::new());
         let (tx, rrx) = mpsc::channel();
-        let mut m = Wasteland::new();
+        let mut m = LocalNet::new();
         m.rx = Some(rrx);
         m.loading = true;
         let mut new = dev([192, 168, 1, 42], true);
@@ -2028,13 +1993,14 @@ mod tests {
     #[test]
     fn overview_and_title_read_like_the_spec() {
         let t = Theme::new(ThemeKind::Color);
-        let mut m = Wasteland::new();
+        let mut m = LocalNet::new();
         m.subnet = "192.168.100.0/24".into();
         m.gateway = Some("192.168.100.1".into());
         m.devices = vec![dev([192, 168, 100, 9], true), dev([192, 168, 100, 11], false)];
         m.scanned = Local.with_ymd_and_hms(2026, 9, 11, 15, 24, 0).single();
         let title = plain(&m.title_line(100, t));
-        assert!(title.starts_with("WASTELAND · 192.168.100.0/24 · 1 online · 1 sleeping · scan 15:24"), "{title}");
+        assert!(title.starts_with("LOCAL NET · 192.168.100.0/24 · 1 online · 1 sleeping · scan 15:24"), "{title}");
+        assert!(title.ends_with(" · v: CONN"), "the other view of the tab is named: {title}");
         let ov = m.overview(40, 3, t);
         assert_eq!(plain(&ov[0]).trim(), "WASTELAND");
         assert_eq!(plain(&ov[1]).trim(), "1 online · 1 sleeping");
@@ -2051,7 +2017,7 @@ mod tests {
     #[test]
     fn list_shows_loading_then_rows_and_narrows_below_80() {
         let t = Theme::new(ThemeKind::Color);
-        let mut m = Wasteland::new();
+        let mut m = LocalNet::new();
         m.loading = true;
         let mut term = Terminal::new(TestBackend::new(100, 10)).unwrap();
         term.draw(|f| m.draw(f, f.area(), t)).unwrap();
@@ -2083,23 +2049,23 @@ mod tests {
     fn draw_does_not_panic_in_any_state_at_tiny_sizes() {
         let t = Theme::new(ThemeKind::Color);
         let states = || {
-            let empty = Wasteland::new();
-            let mut loading = Wasteland::new();
+            let empty = LocalNet::new();
+            let mut loading = LocalNet::new();
             loading.loading = true;
-            let mut errored = Wasteland::new();
+            let mut errored = LocalNet::new();
             errored.err = Some("no gateway found — set [wasteland] subnet".into());
-            let mut list = Wasteland::new();
+            let mut list = LocalNet::new();
             list.devices = vec![dev([192, 168, 1, 9], true), dev([192, 168, 1, 10], false)];
             list.subnet = "192.168.1.0/24".into();
             list.scanned = Some(Local::now());
             list.sel = 1;
-            let mut detail = Wasteland::new();
+            let mut detail = LocalNet::new();
             detail.devices = vec![dev([192, 168, 1, 9], true)];
             detail.mode = Mode::Detail { mac: mac_string(&MAC) };
             detail.ping = Some((Ipv4Addr::new(192, 168, 1, 9), "7 ms".into()));
-            let mut detail_vanished = Wasteland::new();
+            let mut detail_vanished = LocalNet::new();
             detail_vanished.mode = Mode::Detail { mac: mac_string(&MAC) };
-            let mut prompt = Wasteland::new();
+            let mut prompt = LocalNet::new();
             prompt.devices = vec![dev([192, 168, 1, 9], true)];
             prompt.mode = Mode::Rename { mac: mac_string(&MAC), input: "Árvíztűrő".into() };
             vec![empty, loading, errored, list, detail, detail_vanished, prompt]
@@ -2258,7 +2224,7 @@ mod tests {
         assert_eq!(NameSource::from_key("nonsense"), NameSource::Memory);
         // The detail view says where the name came from.
         let t = Theme::new(ThemeKind::Color);
-        let mut m = Wasteland::new();
+        let mut m = LocalNet::new();
         let mut d = dev([192, 168, 1, 9], true);
         d.via = Some(NameSource::Mdns);
         m.devices = vec![d];
@@ -2278,7 +2244,7 @@ mod tests {
     #[test]
     fn a_rename_is_recorded_as_the_users_own() {
         let (ctx, _rx) = crate::shell::test_ctx(toml::Table::new());
-        let mut m = Wasteland::new();
+        let mut m = LocalNet::new();
         m.devices = vec![dev([192, 168, 1, 9], true)];
         m.on_key(KeyEvent::from(KeyCode::Char('n')), &ctx);
         m.on_key(KeyEvent::from(KeyCode::Char('!')), &ctx);

@@ -34,7 +34,7 @@ rather than operated.
 | **MUSIC** | Your own music folder as a browser (mp3, aac/m4a, flac, wav), shuffle, VU; it and RADIO pause each other |
 | **NET** | Ping to the gateway and public resolvers with sparklines and loss, traceroute, a Cloudflare down/up SPEEDTEST with history |
 | **WIFI** | Networks in range with band, channel, dBm; channel congestion as bell curves; best channel per band; connect with a password prompt |
-| **WASTELAND** | Every device on your local network: who is home, who is asleep, who is new — name, vendor, MAC, last seen, with an optional ping sweep |
+| **WASTELAND** | Every device on your local network: who is home, who is asleep, who is new — name, vendor, MAC, last seen, with an optional ping sweep — and, with `v`, the connections your machine has open, by process, with remote names and traffic |
 | **CLOCK** | Big clock, world clocks, sun & moon, a quest timer that ends in a radiation alarm; `v` cycles a full-screen shadowed digital clock and a full-panel analog dial with a day/date window |
 | **DOSIMETER** | Screen time as a radiation dose: a RADS readout in block font, a 24-hour strip of the day, and a 45-on / 15-off rule that alerts with a Geiger burst when the dose goes critical |
 | **NEWS** | Hacker News front page plus your RSS/Atom feeds, with a reader view and on-demand article fetch |
@@ -221,6 +221,13 @@ rustflags = ["-C", "linker-flavor=ld.lld", "-C", "link-self-contained=yes"]
 | `n` | WASTELAND: rename the selected device (`NAME>` prompt, `Esc` cancels) |
 | `s` | WASTELAND: ping sweep on/off for this session |
 | `r` | WASTELAND: rescan now |
+| `v` | WASTELAND: switch between the LOCAL NET and CONN views (a prompt keeps the key) |
+| `↑` `↓` | WASTELAND · CONN: select connection (`PgUp` `PgDn` page) |
+| `Enter` | WASTELAND · CONN: connection details (`Esc` / `Backspace` back) |
+| `s` | WASTELAND · CONN: sort by process / remote / traffic |
+| `f` | WASTELAND · CONN: filter (`FILTER>` prompt over process, address and name; `Esc` clears) |
+| `l` | WASTELAND · CONN: show/hide loopback connections for this session |
+| `r` | WASTELAND · CONN: re-read the connection table now |
 | `Enter` `i` | TERM: attach the keyboard to the embedded terminal (starts the process on the first attach) |
 | `F12` | TERM: release the keyboard back to the Pip-Boy (`[term] release_key`; one key, the same on every layout) |
 | `PgUp` `PgDn` | TERM: scroll the scrollback while not attached (`Shift+PgUp` / `Shift+PgDn` while attached) |
@@ -287,7 +294,17 @@ access for desktop apps in Settings › Privacy & security › Location.
 
 ## WASTELAND
 
-**WASTELAND** is the map of your own network. It reads the Windows IPv4
+The tab has two views and `v` switches between them: **LOCAL NET**, the
+devices around you, and **CONN**, the connections this machine has open. They
+are two halves of the same question — who is on the network, and who is your
+machine actually talking to — and each keeps its own thread, its own cadence
+and its own config section (`[wasteland]`, `[comms]`). The title line names
+the other one (`· v: CONN`) when the title has room for it, and `v` is a
+plain letter again while a `NAME>` or `FILTER>` prompt is open.
+
+### LOCAL NET view
+
+**LOCAL NET** is the map of your own network. It reads the Windows IPv4
 neighbour (ARP) table with `GetIpNetTable2`, keeps the entries that belong to
 your subnet — the gateway's /24 unless `[wasteland] subnet` says otherwise —
 and lists them with name, vendor, MAC and how long ago each one was last seen.
@@ -334,6 +351,41 @@ ARP table. A sweep is visible to anything watching the network (an IDS will
 see it, and so will the neighbours on a shared network), so turn it off with
 `sweep = false` in `config.toml`, or with `s` for the current session; without
 it the tab only sees the devices Windows has talked to lately.
+
+### CONN view
+
+**CONN** answers one question: who is this machine talking to right now. It
+reads the Windows connection table — `GetExtendedTcpTable` for IPv4 and IPv6
+with the owning PID, plus `GetExtendedUdpTable` for bound UDP sockets — every
+`[comms] interval` seconds on its own thread, and lists the connections
+**grouped by the process that owns them**. Each row is the remote address, its
+reverse-DNS name (`LAN` / `public` when there is none), the service behind the
+port (`443 https`, `22 ssh`, `993 imaps`, `5353 mdns`, …), the TCP state, how
+long the connection has been up, and its traffic. `ESTABLISHED` rows are
+bright, the closing ones (`TIME_WAIT`, `CLOSE_WAIT`, the `FIN_WAIT`s) dimmed,
+and a connection that appeared in the last two cycles is highlighted. Listening
+TCP sockets and bound UDP sockets have no remote end, so they are not listed
+one by one — they are the `N listening` count in the title. `Enter` opens the
+details (both endpoints, state, pid and the full image path, first seen, byte
+counters), `s` cycles the sort (process / remote / traffic), `f` filters on
+process, address or name, `l` shows the loopback traffic that is hidden by
+default, and below 80 columns the list keeps PROC, REMOTE and PORT only.
+
+**Traffic needs an elevated Pip-Boy.** The per-connection byte counters come
+from TCP ESTATS (`SetPerTcpConnectionEStats` /`GetPerTcpConnectionEStats`),
+which Windows only hands to an administrator. Started normally, the view says
+`traffic: run as administrator` in its title, the `↓` / `↑` columns show `—`,
+and everything else works exactly the same — the connection list itself needs
+no privileges at all. The counters are IPv4-only (that is the API ESTATS
+offers); IPv6 rows never show a rate.
+
+Nothing here leaves the machine except the reverse-DNS lookups: those go to
+whatever resolver Windows is configured to use, so that resolver sees an
+`in-addr.arpa` query for each remote address you are connected to. At most 32
+addresses are looked up per cycle, 8 at a time with a one second ceiling each,
+and every answer (or non-answer) is cached for an hour. Nothing is written to
+disk and nothing is logged. `[comms] enabled = false` leaves the view out of
+the tab altogether: no thread, no table reads, and `v` has nowhere to go.
 
 ## ART
 
