@@ -564,10 +564,13 @@ pub fn parse_disciplines(html: &str) -> Vec<String> {
 /// !combat Giak 12 14
 /// -> 2 If you fight
 /// ```
-pub fn parse_custom(input: &str, key: &str) -> Book {
+/// Also returns any format problems found (line-numbered where possible), so
+/// the caller can tell the user what's wrong instead of silently dropping it.
+pub fn parse_custom(input: &str, key: &str) -> (Book, Vec<String>) {
     let mut book = Book { key: key.to_string(), title: key.to_string(), ..Default::default() };
     let mut cur: Option<Section> = None;
     let mut para = String::new();
+    let mut problems: Vec<String> = Vec::new();
 
     fn flush_para(para: &mut String, cur: &mut Option<Section>) {
         let p = para.trim().to_string();
@@ -579,7 +582,8 @@ pub fn parse_custom(input: &str, key: &str) -> Book {
         }
     }
 
-    for raw in input.lines() {
+    for (i, raw) in input.lines().enumerate() {
+        let lineno = i + 1;
         let line = raw.trim();
         if let Some(rest) = line.strip_prefix("# ") {
             book.title = rest.trim().to_string();
@@ -594,29 +598,44 @@ pub fn parse_custom(input: &str, key: &str) -> Book {
                 cur = Some(Section { number: n, ..Default::default() });
                 continue;
             }
+            problems.push(format!("line {lineno}: section header '{line}' must be [N]"));
+            continue;
         }
         if let Some(rest) = line.strip_prefix("->") {
             flush_para(&mut para, &mut cur);
             let rest = rest.trim();
             let (num, label) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
-            if let (Ok(target), Some(s)) = (num.parse::<u32>(), cur.as_mut()) {
-                let text = if label.trim().is_empty() { format!("Turn to {target}.") } else { label.trim().to_string() };
-                s.choices.push(Choice { text: text.clone(), target });
-                s.text.push(text);
+            match num.parse::<u32>() {
+                Ok(target) => {
+                    if let Some(s) = cur.as_mut() {
+                        let text = if label.trim().is_empty() { format!("Turn to {target}.") } else { label.trim().to_string() };
+                        s.choices.push(Choice { text: text.clone(), target });
+                        s.text.push(text);
+                    }
+                }
+                Err(_) => problems.push(format!("line {lineno}: choice target '{num}' is not a number")),
             }
             continue;
         }
         if let Some(rest) = line.strip_prefix("!combat") {
             flush_para(&mut para, &mut cur);
             let parts: Vec<&str> = rest.split_whitespace().collect();
-            if parts.len() >= 3 {
-                let en: i32 = parts[parts.len() - 1].parse().unwrap_or(0);
-                let cs: i32 = parts[parts.len() - 2].parse().unwrap_or(0);
-                let name = parts[..parts.len() - 2].join(" ");
-                if let Some(s) = cur.as_mut() {
-                    s.text.push(format!("{name}: COMBAT SKILL {cs}   ENDURANCE {en}"));
-                    s.combat.push(Enemy { enemy: name, combat_skill: cs, endurance: en });
+            let parsed = if parts.len() >= 3 {
+                match (parts[parts.len() - 2].parse::<i32>(), parts[parts.len() - 1].parse::<i32>()) {
+                    (Ok(cs), Ok(en)) => Some((parts[..parts.len() - 2].join(" "), cs, en)),
+                    _ => None,
                 }
+            } else {
+                None
+            };
+            match parsed {
+                Some((name, cs, en)) => {
+                    if let Some(s) = cur.as_mut() {
+                        s.text.push(format!("{name}: COMBAT SKILL {cs}   ENDURANCE {en}"));
+                        s.combat.push(Enemy { enemy: name, combat_skill: cs, endurance: en });
+                    }
+                }
+                None => problems.push(format!("line {lineno}: !combat needs <name> <combat skill> <endurance>")),
             }
             continue;
         }
@@ -636,7 +655,15 @@ pub fn parse_custom(input: &str, key: &str) -> Book {
     for s in &mut book.sections {
         s.random = s.text.iter().any(|p| p.contains("Random Number Table"));
     }
-    book
+    let numbers: std::collections::HashSet<u32> = book.sections.iter().map(|s| s.number).collect();
+    for s in &book.sections {
+        for c in &s.choices {
+            if !numbers.contains(&c.target) {
+                problems.push(format!("section {}: choice \u{2192} {} points at a missing section", s.number, c.target));
+            }
+        }
+    }
+    (book, problems)
 }
 
 // ------------------------------------------------------------------ rng ----
@@ -659,6 +686,7 @@ impl Default for Rng {
 }
 
 impl Rng {
+    #[cfg(test)]
     pub fn seeded(seed: u64) -> Self {
         Self(seed | 1)
     }
@@ -770,6 +798,8 @@ pub struct LibEntry {
     pub sections: Option<u32>,
     pub downloaded: bool,
     pub last: Option<u32>,
+    /// Custom-format diagnostics found on last scan (always 0 for a Lone Wolf entry).
+    pub problems: usize,
 }
 
 impl LibEntry {
@@ -859,8 +889,18 @@ impl Quest {
         }
     }
 
+    /// `code` must already be a validated book code (see [`known_books`]):
+    /// a single plain path component, never `..` or absolute. Defence in
+    /// depth against a config entry that slipped past validation somehow.
     fn book_dir(&self, code: &str) -> PathBuf {
-        self.dir.join("lw").join(code)
+        let base = self.dir.join("lw");
+        let dir = base.join(code);
+        assert!(
+            matches!(Path::new(code).components().collect::<Vec<_>>().as_slice(), [std::path::Component::Normal(_)])
+                && dir.starts_with(&base),
+            "quest: book code escapes the quests dir: {code:?}"
+        );
+        dir
     }
     fn save_path(&self) -> PathBuf {
         self.dir.join("save.json")
@@ -868,13 +908,13 @@ impl Quest {
 
     /// Rebuilds the library list: the known Lone Wolf books plus every
     /// `*.txt` in the quest directory.
-    fn scan(&mut self) {
-        let saves = self.load_saves();
+    fn scan(&mut self, ctx: &Ctx) {
+        let saves = self.load_saves(ctx);
         let mut lib: Vec<LibEntry> = Vec::new();
         for (title, code, sections) in known_books(&self.cfg.books) {
             let downloaded = self.book_dir(&code).join("book.json").is_file();
             let last = saves.get(&code).map(|g| g.section);
-            lib.push(LibEntry { title, key: code, sections: Some(sections), downloaded, last });
+            lib.push(LibEntry { title, key: code, sections: Some(sections), downloaded, last, problems: 0 });
         }
         if let Ok(rd) = fs::read_dir(&self.dir) {
             let mut custom: Vec<LibEntry> = rd
@@ -882,12 +922,15 @@ impl Quest {
                 .filter(|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("txt")))
                 .filter_map(|e| {
                     let key = e.path().file_stem()?.to_string_lossy().into_owned();
-                    let title = fs::read_to_string(e.path())
-                        .ok()
-                        .and_then(|s| s.lines().find_map(|l| l.trim().strip_prefix("# ").map(|t| t.trim().to_string())))
-                        .unwrap_or_else(|| key.clone());
+                    let (title, problems) = match fs::read_to_string(e.path()) {
+                        Ok(content) => {
+                            let (book, problems) = parse_custom(&content, &key);
+                            (book.title, problems.len())
+                        }
+                        Err(_) => (key.clone(), 0),
+                    };
                     let last = saves.get(&key).map(|g| g.section);
-                    Some(LibEntry { title, key, sections: None, downloaded: true, last })
+                    Some(LibEntry { title, key, sections: None, downloaded: true, last, problems })
                 })
                 .collect();
             custom.sort_by(|a, b| a.title.cmp(&b.title));
@@ -897,17 +940,28 @@ impl Quest {
         self.lib = lib;
     }
 
-    fn load_saves(&self) -> BTreeMap<String, Game> {
-        fs::read_to_string(self.save_path())
-            .ok()
-            .and_then(|s| serde_json::from_str::<SaveFile>(&s).ok())
-            .map(|s| s.games)
-            .unwrap_or_default()
+    /// Missing `save.json` is fine (a fresh install). A file that exists but
+    /// won't parse is quarantined to `save.json.bad` so it doesn't get
+    /// silently wiped on the next save, and the user is told.
+    fn load_saves(&self, ctx: &Ctx) -> BTreeMap<String, Game> {
+        let Ok(s) = fs::read_to_string(self.save_path()) else {
+            return BTreeMap::new();
+        };
+        match serde_json::from_str::<SaveFile>(&s) {
+            Ok(sf) => sf.games,
+            Err(_) => {
+                let mut bad = self.save_path().into_os_string();
+                bad.push(".bad");
+                let _ = fs::rename(self.save_path(), PathBuf::from(bad));
+                let _ = ctx.notify.send(Notice::Footer("quest: save.json was unreadable \u{2014} moved to save.json.bad".into()));
+                BTreeMap::new()
+            }
+        }
     }
 
     fn save_game(&self, ctx: &Ctx) {
         let Some(game) = &self.game else { return };
-        let mut all = self.load_saves();
+        let mut all = self.load_saves(ctx);
         all.insert(game.key.clone(), game.clone());
         let json = match serde_json::to_string_pretty(&SaveFile { games: all }) {
             Ok(j) => j,
@@ -932,18 +986,23 @@ impl Quest {
             fs::read_to_string(self.book_dir(&entry.key).join("book.json"))
                 .map_err(|e| e.to_string())
                 .and_then(|s| serde_json::from_str::<Book>(&s).map_err(|e| e.to_string()))
+                .map(|b| (b, Vec::new()))
         } else {
             fs::read_to_string(self.dir.join(format!("{}.txt", entry.key)))
                 .map_err(|e| e.to_string())
                 .map(|s| parse_custom(&s, &entry.key))
         };
         match book {
-            Ok(book) => {
+            Ok((book, problems)) => {
                 if book.sections.is_empty() {
                     let _ = ctx.notify.send(Notice::Footer("quest: the book has no sections".into()));
                     return;
                 }
-                let saved = self.load_saves().get(&book.key).cloned();
+                if !problems.is_empty() {
+                    let shown = problems.iter().take(2).cloned().collect::<Vec<_>>().join(" \u{b7} ");
+                    let _ = ctx.notify.send(Notice::Footer(format!("quest: {} format problem(s) \u{2014} {shown}", problems.len())));
+                }
+                let saved = self.load_saves(ctx).get(&book.key).cloned();
                 let first = book.sections.first().map(|s| s.number).unwrap_or(1);
                 self.game = Some(saved.unwrap_or(Game {
                     key: book.key.clone(),
@@ -1131,7 +1190,20 @@ enum Field {
     Special(usize),
 }
 
+/// A book code becomes a path component (see [`Quest::book_dir`]), so it must
+/// not be able to smuggle in `..` or an absolute path.
+fn valid_book_code(s: &str) -> bool {
+    (2..=16).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+}
+
+/// Printable and short enough to sit in a library row / footer notice.
+fn valid_book_title(s: &str) -> bool {
+    !s.is_empty() && s.chars().count() <= 60 && s.chars().all(|c| !c.is_control())
+}
+
 /// The built-in book list plus any `Title|code|sections` entries from config.
+/// Entries with a bad code/title, an unparsable section count or a duplicate
+/// code are silently skipped here; [`Quest::start`] reports how many.
 fn known_books(extra: &[String]) -> Vec<(String, String, u32)> {
     let mut out: Vec<(String, String, u32)> =
         BOOKS.iter().map(|(t, c, n)| (t.to_string(), c.to_string(), *n)).collect();
@@ -1139,7 +1211,7 @@ fn known_books(extra: &[String]) -> Vec<(String, String, u32)> {
         let parts: Vec<&str> = line.split('|').map(str::trim).collect();
         if parts.len() == 3 {
             if let Ok(n) = parts[2].parse::<u32>() {
-                if !parts[1].is_empty() && !out.iter().any(|(_, c, _)| c == parts[1]) {
+                if valid_book_title(parts[0]) && valid_book_code(parts[1]) && !out.iter().any(|(_, c, _)| c == parts[1]) {
                     out.push((parts[0].to_string(), parts[1].to_string(), n));
                 }
             }
@@ -1229,7 +1301,7 @@ fn spawn_download(
                     }
                 }
                 if failed > 0 {
-                    let _ = tx.send(QEvent::Failed(format!("{failed} page(s) failed \u{2014} press d again to retry")));
+                    let _ = tx.send(QEvent::Failed(format!("{failed} page(s) failed")));
                 }
                 let _ = tx.send(QEvent::Done(Box::new(book)));
             }
@@ -1313,16 +1385,24 @@ impl Module for Quest {
             let _ = ctx.notify.send(Notice::Footer(n));
         }
         self.cfg = cfg;
+        let accepted_extra = known_books(&self.cfg.books).len().saturating_sub(BOOKS.len());
+        let skipped = self.cfg.books.len().saturating_sub(accepted_extra);
+        if skipped > 0 {
+            let _ = ctx.notify.send(Notice::Footer(format!(
+                "quest: {skipped} config book entr{} skipped (bad code/title or duplicate)",
+                if skipped == 1 { "y" } else { "ies" }
+            )));
+        }
         let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default();
         let p = Path::new(&self.cfg.dir);
         self.dir = if p.is_absolute() { p.to_path_buf() } else { exe_dir.join(p) };
         let (tx, rx) = mpsc::channel();
         self.tx = Some(tx);
         self.rx = Some(rx);
-        self.scan();
+        self.scan(ctx);
     }
 
-    fn poll(&mut self, _ctx: &Ctx) -> usize {
+    fn poll(&mut self, ctx: &Ctx) -> usize {
         let mut n = 0;
         if let Some(rx) = &self.rx {
             while let Ok(ev) = rx.try_recv() {
@@ -1340,12 +1420,18 @@ impl Module for Quest {
                         if let Some(e) = self.lib.iter_mut().find(|e| e.key == key) {
                             e.downloaded = true;
                         }
+                        let _ = ctx.notify.send(Notice::Footer(format!(
+                            "quest: downloaded {}: {} sections",
+                            book.title,
+                            book.sections.len()
+                        )));
                     }
                     QEvent::Failed(msg) => {
                         self.downloading = None;
                         if let Some(g) = self.game.as_mut() {
                             g.log_line(format!("download: {msg}"));
                         }
+                        let _ = ctx.notify.send(Notice::Footer(format!("quest: download failed: {msg} \u{2014} press d to retry")));
                     }
                 }
             }
@@ -1363,7 +1449,10 @@ impl Module for Quest {
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> bool {
-        // A spinning die swallows nothing; any key after it lands dismisses it.
+        // Any key after the die lands dismisses it. While it's still
+        // spinning, only swallow keys that would act on the game (they'd
+        // otherwise queue up and fire the moment it lands); q and the
+        // shell's tab keys still get through.
         if let Some(d) = &self.dice {
             if d.started.elapsed() >= DICE_SPIN {
                 let value = d.value;
@@ -1379,7 +1468,8 @@ impl Module for Quest {
                 }
                 return true;
             }
-            return true;
+            return matches!(key.code, KeyCode::Enter | KeyCode::Char('r') | KeyCode::Char('c'))
+                || matches!(key.code, KeyCode::Char(c) if c.is_ascii_digit());
         }
         match self.modal.take() {
             Some(Modal::Picker { chosen, sel }) => return self.key_picker(key, chosen, sel, ctx),
@@ -1469,7 +1559,7 @@ impl Quest {
                 true
             }
             KeyCode::Char('r') => {
-                self.scan();
+                self.scan(ctx);
                 true
             }
             _ => false,
@@ -1587,7 +1677,7 @@ impl Quest {
             }
             KeyCode::Char('l') => {
                 if let Some(book) = &self.book {
-                    if let Some(g) = self.load_saves().get(&book.key) {
+                    if let Some(g) = self.load_saves(ctx).get(&book.key) {
                         self.game = Some(g.clone());
                         self.scroll = 0;
                         self.choice_sel = 0;
@@ -1609,7 +1699,7 @@ impl Quest {
             }
             KeyCode::Esc | KeyCode::Backspace => {
                 self.view = View::Library;
-                self.scan();
+                self.scan(ctx);
                 true
             }
             _ => false,
@@ -1730,7 +1820,8 @@ impl Quest {
                     };
                     let sections = e.sections.map(|n| format!("{n} sections")).unwrap_or_else(|| "text".into());
                     let last = e.last.map(|n| format!(" \u{b7} at {n}")).unwrap_or_default();
-                    ListItem::new(clip(&format!(" {} \u{b7} {state} \u{b7} {sections}{last}", e.title), w))
+                    let problems = if e.problems > 0 { format!(" \u{b7} {} format problems", e.problems) } else { String::new() };
+                    ListItem::new(clip(&format!(" {} \u{b7} {state} \u{b7} {sections}{last}{problems}", e.title), w))
                 })
                 .collect()
         };
@@ -2054,10 +2145,11 @@ mod tests {
 
     #[test]
     fn custom_example_round_trips() {
-        let b = parse_custom(EXAMPLE_CUSTOM, "vault-13");
+        let (b, problems) = parse_custom(EXAMPLE_CUSTOM, "vault-13");
         assert_eq!(b.key, "vault-13");
         assert_eq!(b.title, "Vault 13: The Water Chip Requisition");
         assert!(b.sections.len() >= 8, "{} sections", b.sections.len());
+        assert!(problems.is_empty(), "a well-formed book reports nothing: {problems:?}");
         // Section numbers are unique and every choice target exists.
         let nums: Vec<u32> = b.sections.iter().map(|s| s.number).collect();
         for s in &b.sections {
@@ -2073,17 +2165,33 @@ mod tests {
 
     #[test]
     fn custom_parser_handles_paragraphs_and_odd_lines() {
-        let b = parse_custom("# T\n[1]\nline one\nline two\n\nsecond para\n-> 2 Go on\n!combat Giak 12 14\n[2]\nend\n", "k");
+        let (b, problems) = parse_custom("# T\n[1]\nline one\nline two\n\nsecond para\n-> 2 Go on\n!combat Giak 12 14\n[2]\nend\n", "k");
         assert_eq!(b.title, "T");
         assert_eq!(b.sections.len(), 2);
+        assert!(problems.is_empty(), "{problems:?}");
         let s1 = b.section(1).unwrap();
         assert_eq!(s1.text[0], "line one line two");
         assert_eq!(s1.text[1], "second para");
         assert_eq!(s1.choices, vec![Choice { text: "Go on".into(), target: 2 }]);
         assert_eq!(s1.combat, vec![Enemy { enemy: "Giak".into(), combat_skill: 12, endurance: 14 }]);
-        // A bare "-> 5" with no label still works.
-        let b2 = parse_custom("[1]\n-> 5\n", "k");
+        // A bare "-> 5" with no label still works (though it targets a
+        // section that does not exist in this tiny fixture).
+        let (b2, problems2) = parse_custom("[1]\n-> 5\n", "k");
         assert_eq!(b2.section(1).unwrap().choices[0].target, 5);
+        assert_eq!(problems2.len(), 1);
+    }
+
+    #[test]
+    fn custom_parser_reports_format_problems_with_line_numbers() {
+        let bad = "# Bad\n[one]\ntext\n-> abc go\n!combat OnlyOneArg\n[2]\n-> 99\n";
+        let (b, problems) = parse_custom(bad, "bad");
+        // Section "one" never parsed, so only section 2 exists.
+        assert_eq!(b.sections.len(), 1);
+        assert!(problems.iter().any(|p| p == "line 2: section header '[one]' must be [N]"), "{problems:?}");
+        assert!(problems.iter().any(|p| p == "line 4: choice target 'abc' is not a number"), "{problems:?}");
+        assert!(problems.iter().any(|p| p == "line 5: !combat needs <name> <combat skill> <endurance>"), "{problems:?}");
+        assert!(problems.iter().any(|p| p.contains("section 2: choice \u{2192} 99 points at a missing section")), "{problems:?}");
+        assert_eq!(problems.len(), 4, "{problems:?}");
     }
 
     #[test]
@@ -2187,9 +2295,33 @@ mod tests {
         assert_eq!(r.log, vec!["hello".to_string()]);
     }
 
+    #[test]
+    fn corrupt_save_file_is_quarantined_not_wiped() {
+        let (ctx, rx) = crate::shell::test_ctx(toml::Table::new());
+        let mut q = Quest::new();
+        q.dir = std::env::temp_dir().join(format!("pipboy-quest-test-corrupt-{}", std::process::id()));
+        fs::create_dir_all(&q.dir).unwrap();
+        fs::write(q.save_path(), "not valid json").unwrap();
+
+        let saves = q.load_saves(&ctx);
+        assert!(saves.is_empty(), "starts empty rather than losing the file silently");
+        let bad = q.dir.join("save.json.bad");
+        assert!(bad.is_file(), "the unreadable file was quarantined");
+        let n = rx.try_recv().expect("a footer notice was sent");
+        assert!(matches!(n, Notice::Footer(ref m) if m.contains("save.json.bad")), "{n:?}");
+
+        // A later save must not clobber the quarantined copy.
+        q.game = Some(Game { key: "k".into(), title: "K".into(), ..Default::default() });
+        q.save_game(&ctx);
+        assert!(bad.is_file(), "save.json.bad survives a subsequent save");
+        assert!(q.save_path().is_file());
+
+        let _ = fs::remove_dir_all(&q.dir);
+    }
+
     fn play_quest() -> Quest {
         let mut q = Quest::new();
-        let book = parse_custom(EXAMPLE_CUSTOM, "vault-13");
+        let (book, _) = parse_custom(EXAMPLE_CUSTOM, "vault-13");
         q.game = Some(Game {
             key: book.key.clone(),
             title: book.title.clone(),
@@ -2237,6 +2369,19 @@ mod tests {
     }
 
     #[test]
+    fn dice_spin_only_swallows_game_acting_keys() {
+        let (ctx, _rx) = crate::shell::test_ctx(toml::Table::new());
+        let mut q = play_quest();
+        q.dice = Some(Dice { started: Instant::now(), value: 3 });
+        assert!(!q.on_key(KeyEvent::from(KeyCode::Char('q')), &ctx), "q passes through while spinning");
+        assert!(q.dice.is_some(), "still spinning, untouched by the pass-through key");
+        assert!(q.on_key(KeyEvent::from(KeyCode::Char('5')), &ctx), "digits act on the game, so swallowed");
+        assert!(q.on_key(KeyEvent::from(KeyCode::Enter), &ctx));
+        assert!(q.on_key(KeyEvent::from(KeyCode::Char('r')), &ctx));
+        assert!(q.on_key(KeyEvent::from(KeyCode::Char('c')), &ctx));
+    }
+
+    #[test]
     fn known_books_accepts_config_entries_and_ignores_junk() {
         let base = known_books(&[]).len();
         let more = known_books(&[
@@ -2247,6 +2392,40 @@ mod tests {
         ]);
         assert_eq!(more.len(), base + 1);
         assert!(more.iter().any(|(_, c, n)| c == "06tkot" && *n == 350));
+    }
+
+    #[test]
+    fn known_books_rejects_path_traversal_codes_and_bad_titles() {
+        let base = known_books(&[]).len();
+        let more = known_books(&[
+            "Escape|../../../Temp/x|10".to_string(),
+            "Absolute|/etc/passwd|10".to_string(),
+            "Upper|ABCXYZ|10".to_string(),
+            format!("{}|abcxyz|10", "x".repeat(61)),
+        ]);
+        assert_eq!(more.len(), base, "every entry above is rejected: {more:?}");
+    }
+
+    #[test]
+    #[should_panic(expected = "escapes the quests dir")]
+    fn book_dir_rejects_path_traversal() {
+        let mut q = Quest::new();
+        q.dir = std::env::temp_dir().join("pipboy-quest-test-book-dir");
+        let _ = q.book_dir("../../../Temp/x");
+    }
+
+    #[test]
+    fn download_failure_produces_a_footer_notice_even_with_no_game() {
+        let (ctx, rx) = crate::shell::test_ctx(toml::Table::new());
+        let mut q = Quest::new();
+        let (tx, qrx) = mpsc::channel();
+        q.tx = Some(tx.clone());
+        q.rx = Some(qrx);
+        assert!(q.game.is_none());
+        tx.send(QEvent::Failed("network error".into())).unwrap();
+        q.poll(&ctx);
+        let n = rx.try_recv().expect("a footer notice was sent");
+        assert!(matches!(n, Notice::Footer(ref m) if m.contains("download failed") && m.contains("network error")), "{n:?}");
     }
 
     #[test]
@@ -2319,8 +2498,8 @@ mod tests {
             let mut lib = Quest::new();
             term.draw(|f| lib.draw(f, f.area(), t)).unwrap();
             lib.lib = vec![
-                LibEntry { title: "Flight from the Dark".into(), key: "01fftd".into(), sections: Some(350), downloaded: false, last: None },
-                LibEntry { title: "Vault 13".into(), key: "vault-13".into(), sections: None, downloaded: true, last: Some(4) },
+                LibEntry { title: "Flight from the Dark".into(), key: "01fftd".into(), sections: Some(350), downloaded: false, last: None, problems: 0 },
+                LibEntry { title: "Vault 13".into(), key: "vault-13".into(), sections: None, downloaded: true, last: Some(4), problems: 2 },
             ];
             lib.downloading = Some(("Flight from the Dark".into(), 142, 350));
             term.draw(|f| lib.draw(f, f.area(), t)).unwrap();

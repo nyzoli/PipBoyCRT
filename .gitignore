@@ -6,3 +6,5 @@ dist/
 *.bak
 *.bak2
 screenshots/
+vault/quests/lw/
+vault/quests/save.json*
