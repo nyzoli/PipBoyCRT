@@ -1035,9 +1035,10 @@ impl ConnView {
             );
             return Line::from(Span::styled(truncate(&s, width as usize), style));
         }
-        let name = match &c.name {
-            Some(n) => n.clone(),
-            None => scope(c.remote.ip()).to_string(),
+        let name = match (&c.name, cloud(None, c.remote.ip())) {
+            (Some(n), _) => n.clone(),
+            (None, Some(who)) => format!("{} · {who}", scope(c.remote.ip())),
+            (None, None) => scope(c.remote.ip()).to_string(),
         };
         let s = format!(
             "{} {} {} {} {} {} {} {}",
