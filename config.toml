@@ -173,8 +173,8 @@ view = "normal"   # starting view: "normal" / "digital" / "analog" (`v` cycles t
 # CONN view is the source). For that the public remote IPs of your open
 # connections are sent to geojs.io over HTTPS, which answers with a country
 # only; answers are cached in geo.json next to the executable for 30 days.
-# Set arcs = false to keep them local: no lookup, no arcs. `c` hides the arcs
-# for a session.
+# Nothing else leaves the machine for this. `c` hides the arcs and pauses the
+# lookups for a session; arcs = false switches the feature off entirely.
 [globe]
 arcs = true
 

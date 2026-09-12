@@ -112,8 +112,6 @@ pub struct RemoteConn {
     pub established: bool,
     /// Busiest connection to this address, in + out bytes per second.
     pub rate: u64,
-    /// Process owning that busiest connection.
-    pub process: String,
 }
 
 /// The raw `config.toml` table; each module reads its own section by id.
@@ -190,6 +188,12 @@ pub trait Module {
     fn tick(&mut self, _ctx: &Ctx) {}
     /// A key while this module's tab is active. Return `true` if consumed.
     fn on_key(&mut self, _key: KeyEvent, _ctx: &Ctx) -> bool {
+        false
+    }
+    /// `true` while every key — Ctrl+C included — belongs to the module
+    /// (TERM attached to its child). Otherwise the shell quits on Ctrl+C
+    /// before the module ever sees it.
+    fn captures_keyboard(&self) -> bool {
         false
     }
     /// A key not consumed by the active module (any tab). Return `true` if consumed.

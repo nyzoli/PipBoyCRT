@@ -2,8 +2,9 @@
 //!
 //! Generated once from Google's canonical `countries.csv`
 //! (<https://developers.google.com/public-data/docs/canonical/countries_csv>,
-//! CC BY 4.0), rounded to 4 decimals. Sorted by code for binary search — a
-//! centroid is where GLOBE's arc lands for a connection into that country.
+//! CC BY 4.0), rounded to 4 decimals; AX, BQ, CW, SS and SX added by hand,
+//! the retired AN dropped. Sorted by code for binary search — a centroid is
+//! where GLOBE's arc lands for a connection into that country.
 
 /// `(code, lat, lon)`, sorted by `code`.
 pub const CENTROIDS: &[(&str, f64, f64)] = &[
@@ -14,7 +15,6 @@ pub const CENTROIDS: &[(&str, f64, f64)] = &[
     ("AI", 18.2206, -63.0686), // Anguilla
     ("AL", 41.1533, 20.1683), // Albania
     ("AM", 40.0691, 45.0382), // Armenia
-    ("AN", 12.2261, -69.0601), // Netherlands Antilles
     ("AO", -11.2027, 17.8739), // Angola
     ("AQ", -75.2510, -0.0714), // Antarctica
     ("AR", -38.4161, -63.6167), // Argentina
@@ -22,6 +22,7 @@ pub const CENTROIDS: &[(&str, f64, f64)] = &[
     ("AT", 47.5162, 14.5501), // Austria
     ("AU", -25.2744, 133.7751), // Australia
     ("AW", 12.5211, -69.9683), // Aruba
+    ("AX", 60.1785, 19.9156), // Åland Islands
     ("AZ", 40.1431, 47.5769), // Azerbaijan
     ("BA", 43.9159, 17.6791), // Bosnia and Herzegovina
     ("BB", 13.1939, -59.5432), // Barbados
@@ -35,6 +36,7 @@ pub const CENTROIDS: &[(&str, f64, f64)] = &[
     ("BM", 32.3214, -64.7574), // Bermuda
     ("BN", 4.5353, 114.7277), // Brunei
     ("BO", -16.2902, -63.5887), // Bolivia
+    ("BQ", 12.1784, -68.2385), // Bonaire, Sint Eustatius and Saba
     ("BR", -14.2350, -51.9253), // Brazil
     ("BS", 25.0343, -77.3963), // Bahamas
     ("BT", 27.5142, 90.4336), // Bhutan
@@ -57,6 +59,7 @@ pub const CENTROIDS: &[(&str, f64, f64)] = &[
     ("CR", 9.7489, -83.7534), // Costa Rica
     ("CU", 21.5218, -77.7812), // Cuba
     ("CV", 16.0021, -24.0132), // Cape Verde
+    ("CW", 12.1696, -68.9900), // Curaçao
     ("CX", -10.4475, 105.6904), // Christmas Island
     ("CY", 35.1264, 33.4299), // Cyprus
     ("CZ", 49.8175, 15.4730), // Czech Republic
@@ -211,8 +214,10 @@ pub const CENTROIDS: &[(&str, f64, f64)] = &[
     ("SN", 14.4974, -14.4524), // Senegal
     ("SO", 5.1521, 46.1996), // Somalia
     ("SR", 3.9193, -56.0278), // Suriname
+    ("SS", 6.8770, 31.3070), // South Sudan
     ("ST", 0.1864, 6.6131), // São Tomé and Príncipe
     ("SV", 13.7942, -88.8965), // El Salvador
+    ("SX", 18.0425, -63.0548), // Sint Maarten
     ("SY", 34.8021, 38.9968), // Syria
     ("SZ", -26.5225, 31.4659), // Swaziland
     ("TC", 21.6940, -71.7979), // Turks and Caicos Islands
@@ -260,6 +265,25 @@ pub fn centroid(code: &str) -> Option<(f64, f64)> {
     Some((CENTROIDS[i].1, CENTROIDS[i].2))
 }
 
+/// Great-circle distance in km.
+fn km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    let (p1, p2) = (lat1.to_radians(), lat2.to_radians());
+    let (dp, dl) = ((lat2 - lat1).to_radians(), (lon2 - lon1).to_radians());
+    let a = (dp / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dl / 2.0).sin().powi(2);
+    2.0 * 6371.0 * a.sqrt().asin()
+}
+
+/// The country whose centroid is nearest to `lat`/`lon`, with the distance
+/// in km. Centroids of big countries sit far from their coasts, so callers
+/// apply a radius before trusting the answer.
+pub fn nearest(lat: f64, lon: f64) -> Option<(&'static str, f64)> {
+    CENTROIDS
+        .iter()
+        .map(|(c, la, lo)| (*c, km(lat, lon, *la, *lo)))
+        .filter(|(_, d)| d.is_finite())
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,5 +310,22 @@ mod tests {
         assert_eq!(centroid(""), None);
         assert_eq!(centroid("XX"), None);
         assert_eq!(centroid("USA"), None);
+        for c in ["SS", "CW", "SX", "BQ", "AX"] {
+            assert!(centroid(c).is_some(), "{c}");
+        }
+        assert_eq!(centroid("AN"), None, "Netherlands Antilles is retired");
+    }
+
+    #[test]
+    fn nearest_centroid() {
+        let (c, d) = nearest(47.4979, 19.0402).unwrap();
+        assert_eq!(c, "HU", "Budapest → Hungary, {d:.0} km");
+        assert!(d < 100.0);
+        let (c, d) = nearest(35.68, 139.69).unwrap();
+        assert_eq!(c, "JP");
+        assert!(d < 400.0);
+        assert!(nearest(0.0, -30.0).unwrap().1 > 1500.0, "mid-Atlantic is nowhere near a centroid");
+        assert!(nearest(f64::NAN, 0.0).is_none());
+        assert!((km(0.0, 0.0, 0.0, 180.0) - 20015.0).abs() < 5.0, "half the equator");
     }
 }

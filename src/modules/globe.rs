@@ -8,8 +8,10 @@
 //! open connections on the blackboard ([`CONNECTIONS`]); the country of each
 //! comes from <https://get.geojs.io/> (HTTPS, no key, batched), is cached in
 //! `geo.json` next to the executable for 30 days, and lands on the country's
-//! centroid (`crate::ui::countries`). `[globe] arcs = false` keeps every
-//! address on this machine: no lookup, no arcs.
+//! centroid (`crate::ui::countries`). Those remote addresses are the only
+//! thing that leaves the machine for this; the home country is the centroid
+//! nearest to `[weather]`, found offline. `[globe] arcs = false` keeps every
+//! address here: no lookup, no arcs.
 
 use crate::module::{ConnSnapshot, Ctx, Module, Notice, RemoteConn, Slot, CONNECTIONS, CONNECTIONS_AT};
 use crate::style::Theme;
@@ -17,7 +19,7 @@ use crate::ui::countries;
 use crate::ui::landmask;
 use crate::ui::widgets::truncate;
 use chrono::{Datelike, Timelike, Utc};
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::Marker;
@@ -26,7 +28,7 @@ use ratatui::widgets::canvas::{Canvas, Line as CLine, Points};
 use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -40,6 +42,9 @@ const TRAIL: usize = 30;
 /// geojs country lookup, batched: `?ip=a,b,c`; without `ip` it answers for
 /// the caller — that is how the home country is found.
 const GEO_URL: &str = "https://get.geojs.io/v1/ip/country.json";
+/// A centroid further than this from `[weather]` is not "home": no country
+/// is then left out of the arcs.
+const HOME_RADIUS_KM: f64 = 1500.0;
 /// Addresses per geojs request, and the shortest gap between two requests.
 const GEO_BATCH: usize = 50;
 const GEO_GAP: Duration = Duration::from_secs(3);
@@ -146,7 +151,7 @@ pub struct ArcInfo {
 
 /// One arc per country the remotes fall into, the home country left out,
 /// addresses without a known country skipped. Sorted by code, so the map is
-/// stable between scans.
+/// stable between scans. `count` shows up in the label (`US·3`).
 pub fn build_arcs(remotes: &[RemoteConn], geo: &HashMap<IpAddr, Geo>, home_code: &str) -> Vec<ArcInfo> {
     let mut by_code: BTreeMap<&str, ArcInfo> = BTreeMap::new();
     for r in remotes {
@@ -193,9 +198,43 @@ struct GeoRow {
     name: String,
 }
 
-/// Parses a geojs country answer (a JSON array, or one object for the
-/// caller's own address) into `(ip, code, name)`; rows with an unparsable
-/// `ip` are dropped, rows without a country are kept with an empty code.
+/// A geojs answer is untrusted text that ends up printed on the map: drop
+/// escape sequences (CSI to its final byte, OSC to BEL/ST, two-byte ones)
+/// and every control character, C1 included.
+fn sanitize(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        if c == '\x1b' {
+            match it.next() {
+                Some('[') => {
+                    for c in it.by_ref() {
+                        if ('\x40'..='\x7e').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    while let Some(c) = it.next() {
+                        if c == '\x07' || (c == '\x1b' && it.next().is_some()) {
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
+        if !c.is_control() && !('\u{80}'..='\u{9f}').contains(&c) {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Parses a geojs country answer (a JSON array, or one object) into
+/// `(ip, code, name)`; rows with an unparsable `ip` are dropped, rows without
+/// a country are kept with an empty code.
 pub fn parse_country(body: &str) -> Result<Vec<(IpAddr, String, String)>, String> {
     let rows: Vec<GeoRow> = match serde_json::from_str::<Vec<GeoRow>>(body) {
         Ok(v) => v,
@@ -205,9 +244,9 @@ pub fn parse_country(body: &str) -> Result<Vec<(IpAddr, String, String)>, String
         .into_iter()
         .filter_map(|r| {
             let ip = r.ip.parse::<IpAddr>().ok()?;
-            let code = r.country.trim().to_ascii_uppercase();
+            let code = sanitize(&r.country).trim().to_ascii_uppercase();
             let code = if code.len() == 2 && code.bytes().all(|b| b.is_ascii_uppercase()) { code } else { String::new() };
-            Some((ip, code, truncate(r.name.trim(), 40)))
+            Some((ip, code, truncate(sanitize(&r.name).trim(), 40)))
         })
         .collect())
 }
@@ -233,11 +272,18 @@ pub fn load_geo(path: &Path, now: u64) -> HashMap<IpAddr, Geo> {
         .collect()
 }
 
-/// `<path>.tmp` + rename, so a crash mid-write cannot leave half a file.
-fn save_geo(path: &Path, geo: &HashMap<IpAddr, Geo>) -> std::io::Result<()> {
-    let raw: BTreeMap<String, &Geo> = geo.iter().map(|(ip, g)| (ip.to_string(), g)).collect();
+/// `<path>.tmp` + rename, so a crash mid-write cannot leave half a file;
+/// a leftover `.tmp` from such a crash is removed first. Entries past
+/// [`GEO_TTL`] at `now` are not written.
+fn save_geo(path: &Path, geo: &HashMap<IpAddr, Geo>, now: u64) -> std::io::Result<()> {
+    let raw: BTreeMap<String, &Geo> = geo
+        .iter()
+        .filter(|(_, g)| now.saturating_sub(g.fetched) < GEO_TTL)
+        .map(|(ip, g)| (ip.to_string(), g))
+        .collect();
     let text = serde_json::to_string_pretty(&raw).unwrap_or_else(|_| "{}".to_string());
     let tmp = path.with_extension("json.tmp");
+    let _ = std::fs::remove_file(&tmp);
     std::fs::write(&tmp, text)?;
     std::fs::rename(&tmp, path)
 }
@@ -289,8 +335,6 @@ enum Event {
     Error(String),
     /// Country answers (cache load or a fresh batch).
     Geo(Vec<(IpAddr, Geo)>),
-    /// The country this machine sits in, as geojs sees it.
-    Home(String),
 }
 
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -333,8 +377,13 @@ pub struct Globe {
     show_night: bool,
     /// `c`: the arc layer for this session (only meaningful with `cfg.arcs`).
     show_arcs: bool,
-    /// Land dots for the last canvas size; recomputed only when it changes.
-    dots: RefCell<((usize, usize), Vec<(f64, f64)>)>,
+    /// Land dots split into day and night for the last canvas size and
+    /// minute; the sun moves a quarter degree a minute, the split is ~11k
+    /// elevations, so neither is redone per frame.
+    dots: RefCell<((usize, usize, i64), Vec<(f64, f64)>, Vec<(f64, f64)>)>,
+    /// Whether the last thing rendered was this tab (`draw`) rather than its
+    /// OVERVIEW block: fast frames are only worth it for the tab itself.
+    drawn: Cell<bool>,
     rx: Option<Receiver<Event>>,
     tx_refresh: Option<tokio::sync::mpsc::Sender<()>>,
     /// Addresses to look up, towards the geojs task.
@@ -368,7 +417,8 @@ impl Globe {
             show_trail: true,
             show_night: true,
             show_arcs: true,
-            dots: RefCell::new(((0, 0), Vec::new())),
+            dots: RefCell::new(((0, 0, 0), Vec::new(), Vec::new())),
+            drawn: Cell::new(false),
             rx: None,
             tx_refresh: None,
             tx_geo: None,
@@ -387,15 +437,18 @@ impl Globe {
     }
 
     /// Rebuilds the arcs from the latest remotes + known countries and asks
-    /// the geojs task about the addresses still unknown.
+    /// the geojs task about the addresses still unknown — unless `c` has
+    /// hidden the layer, which pauses the lookups too.
     fn rebuild_arcs(&mut self) {
-        let unknown: Vec<IpAddr> =
-            self.remotes.iter().map(|r| r.ip).filter(|ip| !self.geo.contains_key(ip)).collect();
-        if !unknown.is_empty() {
-            if let Some(tx) = &self.tx_geo {
-                // A full channel means a request is already queued; the next
-                // snapshot asks again.
-                let _ = tx.try_send(unknown);
+        if self.arcs_on() {
+            let unknown: Vec<IpAddr> =
+                self.remotes.iter().map(|r| r.ip).filter(|ip| !self.geo.contains_key(ip)).collect();
+            if !unknown.is_empty() {
+                if let Some(tx) = &self.tx_geo {
+                    // A full channel means a request is already queued; the
+                    // next snapshot asks again.
+                    let _ = tx.try_send(unknown);
+                }
             }
         }
         self.arcs = build_arcs(&self.remotes, &self.geo, &self.home_code);
@@ -437,16 +490,28 @@ impl Globe {
     }
 }
 
-/// Cell of a `(lon, lat)` on a `w`×`h` map, the way `Canvas::print` places it.
+/// Cell of a `(lon, lat)` on a `w`×`h` map — the same truncating cast the
+/// canvas uses to place a `print`ed label, so the collision map is exact.
 fn cell(lon: f64, lat: f64, w: u16, h: u16) -> (u16, u16) {
-    let x = ((lon + 180.0) / 360.0 * (w.max(1) - 1) as f64).round() as u16;
-    let y = ((90.0 - lat) / 180.0 * (h.max(1) - 1) as f64).round() as u16;
+    let x = ((lon + 180.0) * (w.max(1) - 1) as f64 / 360.0) as u16;
+    let y = ((90.0 - lat) * (h.max(1) - 1) as f64 / 180.0) as u16;
     (x.min(w.saturating_sub(1)), y.min(h.saturating_sub(1)))
 }
 
-/// Labels for the arc ends: the country code, or its name from 100 columns.
-/// A label that would sit on the home label's row and columns, or on an
-/// already placed one, is left out — the arc still shows where it goes.
+/// The country whose centroid is within [`HOME_RADIUS_KM`] of home, empty
+/// when none is (a big country's centroid can be further than that from its
+/// own coast: then no country is left out of the arcs).
+fn home_country(lat: f64, lon: f64) -> String {
+    match countries::nearest(lat, lon) {
+        Some((code, km)) if km <= HOME_RADIUS_KM => code.to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Labels for the arc ends: the country code, or its name from 100 columns,
+/// with `·N` when more than one address is behind the arc. A label that
+/// would sit on the home label's row and columns, or on an already placed
+/// one, is left out — the arc still shows where it goes.
 pub fn arc_labels(
     arcs: &[ArcInfo],
     home: (f64, f64),
@@ -461,7 +526,10 @@ pub fn arc_labels(
     let mut taken = vec![span(home.0, home.1, home_label.chars().count())];
     let mut out = Vec::new();
     for a in arcs {
-        let text = if w >= 100 && !a.name.is_empty() { a.name.clone() } else { a.code.clone() };
+        let mut text = if w >= 100 && !a.name.is_empty() { a.name.clone() } else { a.code.clone() };
+        if a.count > 1 {
+            text.push_str(&format!("·{}", a.count));
+        }
         let (y, x0, x1) = span(a.to.0, a.to.1, text.chars().count());
         if x1 > w || taken.iter().any(|&(ty, tx0, tx1)| ty == y && x0 < tx1 && tx0 < x1) {
             continue;
@@ -528,9 +596,11 @@ and an arc to every country this machine has a connection to.
 The arcs come from WASTELAND's connection table: the public
 remote addresses are sent to geojs.io over HTTPS, which answers
 with a country and nothing more; answers are kept in geo.json
-next to the executable for 30 days. Bright arcs are established,
-dim ones closing; the busiest carries a travelling dot. Set
-[globe] arcs = false to keep every address on this machine.
+next to the executable for 30 days. Nothing else leaves the
+machine for this. Bright arcs are established, dim ones closing;
+the busiest carries a travelling dot. c hides the arcs and
+pauses the lookups; [globe] arcs = false switches the feature
+off entirely.
 
 The ISS position comes from a public API and updates on its
 own, so r is only for when you cannot wait. Waving at the
@@ -568,6 +638,7 @@ is permitted; being seen back is not part of the contract."
             let _ = ctx.notify.send(Notice::Footer(n));
         }
         self.home = home;
+        self.home_code = home_country(self.home.lat, self.home.lon);
         let (cfg, notice) = ctx.config.section::<GlobeCfg>(self.id());
         if let Some(n) = notice {
             let _ = ctx.notify.send(Notice::Footer(n));
@@ -602,10 +673,6 @@ is permitted; being seen back is not part of the contract."
                         self.geo.extend(rows);
                         dirty = true;
                     }
-                    Event::Home(code) => {
-                        self.home_code = code;
-                        dirty = true;
-                    }
                 }
             }
         }
@@ -636,7 +703,7 @@ is permitted; being seen back is not part of the contract."
     }
 
     fn wants_fast_frames(&self, active: bool) -> bool {
-        active && self.arcs_on() && self.busiest.is_some()
+        active && self.drawn.get() && self.arcs_on() && self.busiest.is_some()
     }
 
     fn on_key(&mut self, key: KeyEvent, _ctx: &Ctx) -> bool {
@@ -649,8 +716,12 @@ is permitted; being seen back is not part of the contract."
                 self.show_night = !self.show_night;
                 true
             }
-            KeyCode::Char('c') if self.cfg.arcs => {
+            KeyCode::Char('c') if self.cfg.arcs && !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.show_arcs = !self.show_arcs;
+                if self.show_arcs {
+                    // Lookups paused while hidden: catch up on what came in.
+                    self.rebuild_arcs();
+                }
                 true
             }
             KeyCode::Char('r') => {
@@ -664,10 +735,12 @@ is permitted; being seen back is not part of the contract."
     }
 
     fn draw(&self, f: &mut Frame, area: Rect, t: Theme) {
+        self.drawn.set(true);
         if area.width == 0 || area.height == 0 {
             return;
         }
-        let s = subsolar(Utc::now());
+        let now = Utc::now();
+        let s = subsolar(now);
         let [head, map] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
         f.render_widget(Paragraph::new(self.title_line(head.width, s, t)), head);
         if map.width == 0 || map.height == 0 {
@@ -675,30 +748,27 @@ is permitted; being seen back is not part of the contract."
         }
 
         let (cols, rows) = (map.width as usize * 2, map.height as usize * 4);
-        let (mut day, mut night) = (Vec::new(), Vec::new());
-        {
-            let mut cache = self.dots.borrow_mut();
-            if cache.0 != (cols, rows) {
-                let mut v = Vec::new();
-                for dy in 0..rows {
-                    let lat = dot_lat(dy, rows);
-                    for dx in 0..cols {
-                        let lon = dot_lon(dx, cols);
-                        if landmask::is_land(lat, lon) {
-                            v.push((lon, lat));
-                        }
+        let key = (cols, rows, if self.show_night { now.timestamp() / 60 } else { -1 });
+        if self.dots.borrow().0 != key {
+            let (mut day, mut night) = (Vec::new(), Vec::new());
+            for dy in 0..rows {
+                let lat = dot_lat(dy, rows);
+                for dx in 0..cols {
+                    let lon = dot_lon(dx, cols);
+                    if !landmask::is_land(lat, lon) {
+                        continue;
+                    }
+                    if !self.show_night || sun_elevation(lat, lon, s) >= HORIZON {
+                        day.push((lon, lat));
+                    } else {
+                        night.push((lon, lat));
                     }
                 }
-                *cache = ((cols, rows), v);
             }
-            for &(lon, lat) in &cache.1 {
-                if !self.show_night || sun_elevation(lat, lon, s) >= HORIZON {
-                    day.push((lon, lat));
-                } else {
-                    night.push((lon, lat));
-                }
-            }
+            *self.dots.borrow_mut() = (key, day, night);
         }
+        let dots = self.dots.borrow();
+        let (day, night) = (&dots.1, &dots.2);
         let term: Vec<(f64, f64)> = if self.show_night {
             (0..cols).map(|dx| dot_lon(dx, cols)).map(|lon| (lon, terminator_lat(lon, s))).collect()
         } else {
@@ -721,8 +791,8 @@ is permitted; being seen back is not part of the contract."
             .x_bounds([-180.0, 180.0])
             .y_bounds([-90.0, 90.0])
             .paint(move |ctx| {
-                ctx.draw(&Points { coords: &night, color: dim });
-                ctx.draw(&Points { coords: &day, color: lit });
+                ctx.draw(&Points { coords: night, color: dim });
+                ctx.draw(&Points { coords: day, color: lit });
                 ctx.draw(&Points { coords: &term, color: hi });
                 if show_trail && !trail.is_empty() {
                     ctx.draw(&Points { coords: &trail, color: dim });
@@ -766,6 +836,7 @@ is permitted; being seen back is not part of the contract."
     }
 
     fn overview(&self, _w: u16, _h: u16, t: Theme) -> Vec<Line<'static>> {
+        self.drawn.set(false);
         let s = subsolar(Utc::now());
         let iss = match self.iss {
             Some(i) => fmt_ll(i.lat, i.lon),
@@ -792,10 +863,13 @@ is permitted; being seen back is not part of the contract."
 }
 
 /// Answers "which country is this address in" for the module: loads the
-/// cache, asks geojs for the machine's own country, then serves batches of
-/// unknown addresses from the channel — at most [`GEO_BATCH`] per request,
-/// one request per [`GEO_GAP`], [`GEO_BACKOFF`] after a failure. Every
-/// answer goes back as [`Event::Geo`] and into `geo.json`.
+/// cache, then serves batches of unknown addresses from the channel — at
+/// most [`GEO_BATCH`] per request, one request per [`GEO_GAP`],
+/// [`GEO_BACKOFF`] after a failure. Every answer goes back as [`Event::Geo`]
+/// and into `geo.json`; an address the answer skipped is remembered as
+/// unknown so it is asked once per [`GEO_TTL`], not once per scan. The file
+/// is a few KB, so it is read and written right here on the runtime, like
+/// the ISS fetch's own I/O.
 fn spawn_geo(
     rt: &tokio::runtime::Handle,
     tx: StdSender<Event>,
@@ -812,14 +886,6 @@ fn spawn_geo(
             return;
         }
         let mut next_ok = Instant::now();
-        if let Ok(rows) = fetch_country(&client, "").await {
-            if let Some((_, code, _)) = rows.into_iter().next() {
-                if tx.send(Event::Home(code)).is_err() {
-                    return;
-                }
-            }
-            next_ok = Instant::now() + GEO_GAP;
-        }
         loop {
             let Some(ips) = ask_rx.recv().await else { return };
             let mut unknown: Vec<IpAddr> = ips.into_iter().filter(|ip| !cache.contains_key(ip)).collect();
@@ -834,15 +900,23 @@ fn spawn_geo(
             match fetch_country(&client, &list).await {
                 Ok(rows) => {
                     let now = unix_now();
-                    let fresh: Vec<(IpAddr, Geo)> = rows
+                    let mut fresh: Vec<(IpAddr, Geo)> = rows
                         .into_iter()
                         .filter(|(ip, _, _)| unknown.contains(ip))
                         .map(|(ip, country, name)| (ip, Geo { country, name, fetched: now }))
                         .collect();
-                    cache.extend(fresh.iter().cloned());
-                    let _ = save_geo(&path, &cache);
-                    if tx.send(Event::Geo(fresh)).is_err() {
-                        return;
+                    // Whatever the answer left out is "unknown" until the TTL runs out.
+                    for ip in &unknown {
+                        if !fresh.iter().any(|(f, _)| f == ip) {
+                            fresh.push((*ip, Geo { fetched: now, ..Geo::default() }));
+                        }
+                    }
+                    if !fresh.is_empty() {
+                        cache.extend(fresh.iter().cloned());
+                        let _ = save_geo(&path, &cache, now);
+                        if tx.send(Event::Geo(fresh)).is_err() {
+                            return;
+                        }
                     }
                     next_ok = Instant::now() + GEO_GAP;
                 }
@@ -853,12 +927,11 @@ fn spawn_geo(
     ask_tx
 }
 
-/// `ips` is the comma-separated list for `?ip=`; empty asks about the caller.
+/// `ips` is the comma-separated list for `?ip=`.
 async fn fetch_country(client: &reqwest::Client, ips: &str) -> Result<Vec<(IpAddr, String, String)>, String> {
     // Addresses are digits, dots and colons: nothing to escape in a query.
-    let url = if ips.is_empty() { GEO_URL.to_string() } else { format!("{GEO_URL}?ip={ips}") };
     let body = client
-        .get(url)
+        .get(format!("{GEO_URL}?ip={ips}"))
         .send()
         .await
         .map_err(|e| e.to_string())?
@@ -1048,9 +1121,19 @@ mod tests {
             ("2606:4700::1111".parse().unwrap(), "US".into(), String::new()),
             "missing name, upper-cased code"
         );
-        // The caller's own answer is one object, not an array.
+        // One object instead of an array is accepted too.
         let me = parse_country(r#"{"country":"HU","ip":"5.6.7.8","name":"Hungary"}"#).unwrap();
         assert_eq!(me[0].1, "HU");
+        // Untrusted text: escapes and controls never reach the map.
+        let evil = parse_country(
+            "[{\"ip\":\"1.2.3.4\",\"country\":\"D\\u001b[31mE\",\"name\":\"Ger\\u001b[2Jmany\\u001b]0;pwn\\u0007\\u0007\\u0085!\"}]",
+        )
+        .unwrap();
+        assert_eq!(evil[0].1, "DE");
+        assert_eq!(evil[0].2, "Germany!");
+        assert_eq!(sanitize("a\x1b"), "a");
+        assert_eq!(sanitize("a\x1b]8;;http://x\x1b\\b"), "ab");
+        assert_eq!(sanitize("Côte d'Ivoire"), "Côte d'Ivoire");
         assert!(parse_country("nope").is_err());
         assert!(parse_country("[]").unwrap().is_empty());
         assert_eq!(parse_country(r#"[{"ip":"1.2.3.4","country":"USA"}]"#).unwrap()[0].1, "", "3 letters is not a code");
@@ -1066,8 +1149,10 @@ mod tests {
         let (a, b): (IpAddr, IpAddr) = ("8.8.8.8".parse().unwrap(), "1.1.1.1".parse().unwrap());
         m.insert(a, Geo { country: "US".into(), name: "United States".into(), fetched: now - 100 });
         m.insert(b, Geo { country: String::new(), name: String::new(), fetched: now - GEO_TTL - 1 });
-        save_geo(&p, &m).unwrap();
-        assert!(!p.with_extension("json.tmp").exists());
+        std::fs::write(p.with_extension("json.tmp"), "stale").unwrap();
+        save_geo(&p, &m, now).unwrap();
+        assert!(!p.with_extension("json.tmp").exists(), "the stale tmp is gone");
+        assert!(!std::fs::read_to_string(&p).unwrap().contains("1.1.1.1"), "expired entries are not written");
         let back = load_geo(&p, now);
         assert_eq!(back.len(), 1, "the 30-day-old one is gone: {back:?}");
         assert_eq!(back[&a].country, "US");
@@ -1078,7 +1163,15 @@ mod tests {
     }
 
     fn remote(ip: &str, established: bool, rate: u64) -> RemoteConn {
-        RemoteConn { ip: ip.parse().unwrap(), established, rate, process: "p".into() }
+        RemoteConn { ip: ip.parse().unwrap(), established, rate }
+    }
+
+    #[test]
+    fn home_country_is_the_nearest_centroid_within_reason() {
+        assert_eq!(home_country(47.4979, 19.0402), "HU");
+        assert_eq!(home_country(35.68, 139.69), "JP");
+        assert_eq!(home_country(0.0, -30.0), "", "mid-Atlantic: nothing within 1500 km");
+        assert_eq!(home_country(f64::NAN, 1.0), "");
     }
 
     fn geo(code: &str, name: &str) -> Geo {
@@ -1136,7 +1229,18 @@ mod tests {
         // Two arcs landing on the same cell: only one label.
         let dup = vec![mk("US", "", (-95.7, 37.1)), mk("UM", "", (-95.7, 37.1))];
         assert_eq!(arc_labels(&dup, home, "⌂", 80, 20).len(), 1);
-        assert!(arc_labels(&arcs, home, "⌂", 1, 1).len() <= 1, "tiny map must not panic");
+        // More than one address behind an arc shows in the label.
+        let mut many = mk("US", "United States", (-95.7, 37.1));
+        many.count = 3;
+        assert_eq!(arc_labels(&[many.clone()], home, "⌂", 80, 20)[0].2, "US·3");
+        assert_eq!(arc_labels(&[many], home, "⌂", 120, 20)[0].2, "United States·3");
+        // A 1×1 map: everything lands on the home cell, nothing fits.
+        assert_eq!(arc_labels(&arcs, home, "⌂", 1, 1).len(), 0);
+        // The collision map uses the canvas's own placement: (0,0) is the
+        // top-left cell and 180°E the last column, both truncated, not rounded.
+        assert_eq!(cell(-180.0, 90.0, 80, 20), (0, 0));
+        assert_eq!(cell(180.0, -90.0, 80, 20), (79, 19));
+        assert_eq!(cell(-179.0, 89.0, 80, 20), (0, 0), "truncating");
     }
 
     #[test]
@@ -1157,7 +1261,7 @@ mod tests {
         g.poll(&ctx);
         assert_eq!(g.arcs.len(), 2, "{:?}", g.arcs);
         assert_eq!(g.busiest, Some(1), "JP < US by code; US has the traffic");
-        assert!(g.wants_fast_frames(true) && !g.wants_fast_frames(false));
+        assert!(!g.wants_fast_frames(true), "nothing drawn yet");
         g.tick(&ctx);
         assert!(g.dot_t > 0.0);
         // Mid-arc, well clear of the home label that is printed on top of it.
@@ -1175,6 +1279,11 @@ mod tests {
         assert!(text.contains("3 links / 2 countries"), "{text}");
         assert!(text.contains("United States") && text.contains("Japan"), "labels at 120 columns");
         assert!(text.contains('●'), "the travelling dot");
+        assert!(g.wants_fast_frames(true), "the tab was drawn with a moving dot");
+        g.overview(30, 2, t);
+        assert!(!g.wants_fast_frames(true), "OVERVIEW never earns fast frames");
+        screen(&g, 120, 40);
+        assert!(g.wants_fast_frames(true));
         let text = screen(&g, 80, 24);
         assert!(text.contains("US") && text.contains("JP"), "codes at 80 columns");
         let text = screen(&g, 50, 14);
@@ -1193,10 +1302,11 @@ mod tests {
         assert!(g.help().contains("c arcs") && g.manual().contains("geojs.io"));
         assert!(g.status().ends_with("arcs=2/3"), "{}", g.status());
 
-        // The same snapshot is not re-read; a new one is.
+        // An unchanged change key means the snapshot is not even cloned.
         let n = g.remotes.len();
+        ctx.board.publish(CONNECTIONS, ConnSnapshot { taken: Instant::now(), remotes: vec![] });
         g.poll(&ctx);
-        assert_eq!(g.remotes.len(), n);
+        assert_eq!(g.remotes.len(), n, "same CONNECTIONS_AT, snapshot ignored");
         let snap = ConnSnapshot { taken: Instant::now() + Duration::from_secs(1), remotes: vec![] };
         ctx.board.publish(CONNECTIONS_AT, snap.taken);
         ctx.board.publish(CONNECTIONS, snap);

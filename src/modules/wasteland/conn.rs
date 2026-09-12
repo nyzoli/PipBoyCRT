@@ -246,27 +246,42 @@ fn port_label(port: u16) -> String {
     }
 }
 
+/// `::ffff:a.b.c.d` (the TCP6 table's spelling of an IPv4 peer) is judged
+/// as `a.b.c.d`.
 pub fn is_loopback(ip: IpAddr) -> bool {
-    ip.is_loopback()
+    match ip {
+        IpAddr::V6(v6) if v6.to_ipv4_mapped().is_some() => v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback()),
+        _ => ip.is_loopback(),
+    }
 }
 
-/// Addresses that never leave the building: RFC1918, link-local and IPv6 ULA.
+/// Addresses that never leave the building: RFC1918, link-local, CGNAT
+/// (100.64/10), multicast, IPv6 ULA — and the IPv4-mapped spelling of each.
 pub fn is_private(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
             let o = v4.octets();
-            v4.is_private() || v4.is_link_local() || o[0] == 0 || v4.is_unspecified()
+            v4.is_private()
+                || v4.is_link_local()
+                || v4.is_multicast()
+                || v4.is_broadcast()
+                || o[0] == 0
+                || v4.is_unspecified()
+                || (o[0] == 100 && (o[1] & 0xc0) == 64)
         }
         IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_private(IpAddr::V4(v4));
+            }
             let s = v6.segments();
-            v6.is_unspecified() || (s[0] & 0xfe00) == 0xfc00 || (s[0] & 0xffc0) == 0xfe80
+            v6.is_unspecified() || v6.is_multicast() || (s[0] & 0xfe00) == 0xfc00 || (s[0] & 0xffc0) == 0xfe80
         }
     }
 }
 
 /// What GLOBE gets to see: the public remote addresses, one entry each. A
-/// remote with several connections keeps its busiest one's rate and process
-/// and counts as ESTABLISHED when any of them is.
+/// remote with several connections keeps its busiest one's rate and counts
+/// as ESTABLISHED when any of them is.
 pub fn remote_snapshot(conns: &[Conn], taken: Instant) -> ConnSnapshot {
     let mut by_ip: BTreeMap<IpAddr, RemoteConn> = BTreeMap::new();
     for c in conns {
@@ -278,14 +293,11 @@ pub fn remote_snapshot(conns: &[Conn], taken: Instant) -> ConnSnapshot {
         let established = c.state == "ESTABLISHED";
         match by_ip.get_mut(&ip) {
             None => {
-                by_ip.insert(ip, RemoteConn { ip, established, rate, process: c.process.clone() });
+                by_ip.insert(ip, RemoteConn { ip, established, rate });
             }
             Some(r) => {
                 r.established |= established;
-                if rate > r.rate {
-                    r.rate = rate;
-                    r.process = c.process.clone();
-                }
+                r.rate = r.rate.max(rate);
             }
         }
     }
@@ -1652,13 +1664,14 @@ mod tests {
         m.conns.push(conn("chrome", "142.250.185.78", 8443, "CLOSE_WAIT", Some(500_000)));
         m.conns.push(conn("x", "127.0.0.1", 80, "ESTABLISHED", Some(1)));
         m.conns.push(conn("x", "fe80::1", 80, "ESTABLISHED", Some(1)));
+        m.conns.push(conn("x", "::ffff:192.168.1.5", 80, "ESTABLISHED", Some(1)));
+        m.conns.push(conn("x", "100.64.3.3", 80, "ESTABLISHED", Some(1)));
         let snap = remote_snapshot(&m.conns, Instant::now());
         let ips: Vec<String> = snap.remotes.iter().map(|r| r.ip.to_string()).collect();
         assert_eq!(ips, ["142.250.185.78", "142.250.185.99", "203.0.113.7"], "no LAN, loopback or link-local; one per ip");
         let g = &snap.remotes[0];
         assert!(g.established, "any ESTABLISHED connection counts");
         assert_eq!(g.rate, 750_000, "the busiest connection's in+out");
-        assert_eq!(g.process, "chrome");
         assert!(!snap.remotes[1].established);
         assert_eq!(snap.remotes[1].rate, 0, "no counters → 0");
         assert!(remote_snapshot(&[], Instant::now()).remotes.is_empty());
@@ -1677,6 +1690,16 @@ mod tests {
         assert!(!is_private(ip("172.32.0.1")), "just outside 172.16/12");
         assert!(!is_private(ip("2606:4700::1111")));
         assert!(is_loopback(ip("127.0.0.1")) && is_loopback(ip("::1")));
+        // The TCP6 table spells IPv4 peers as ::ffff:a.b.c.d.
+        assert!(is_private(ip("::ffff:192.168.1.5")), "mapped LAN");
+        assert!(is_private(ip("::ffff:10.0.0.4")));
+        assert!(!is_private(ip("::ffff:142.250.185.78")), "mapped public");
+        assert!(is_loopback(ip("::ffff:127.0.0.1")), "mapped loopback");
+        assert!(!is_loopback(ip("::ffff:8.8.8.8")));
+        assert!(is_private(ip("100.64.0.1")) && is_private(ip("100.127.255.254")), "CGNAT");
+        assert!(!is_private(ip("100.63.255.255")) && !is_private(ip("100.128.0.0")), "just outside 100.64/10");
+        assert!(is_private(ip("224.0.0.251")) && is_private(ip("ff02::fb")), "multicast");
+        assert!(is_private(ip("255.255.255.255")), "broadcast");
         assert_eq!(scope(ip("10.0.0.4")), "LAN");
         assert_eq!(scope(ip("1.1.1.1")), "public");
         assert_eq!(scope(ip("127.0.0.1")), "local");
