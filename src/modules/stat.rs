@@ -97,6 +97,22 @@ impl Module for Stat {
     fn describe(&self) -> &'static str {
         "CPU, memory, disks, network, GPU, battery, S.P.E.C.I.A.L. sheet"
     }
+    fn manual(&self) -> &'static str {
+        "\
+STAT is the vitals panel: CPU, memory, disks, network traffic,
+the GPU and, on a laptop, the battery that also rides along in
+the header. The graphs feed themselves; nothing to press.
+
+  s     the S.P.E.C.I.A.L. character sheet, and back again
+
+The sheet grades your machine on the seven Vault-Tec virtues:
+Endurance is uptime and battery, Agility is the CPU load and
+the process count, Luck is whatever was left over. A low score
+is the hardware's fault, not a comment on your character.
+
+  ←/→   change tab            1-9  jump to a tab
+  space play/pause the radio  +/-  volume     m  mute"
+    }
     fn help(&self) -> &'static str {
         match self.view {
             StatView::Stats => "s special   ←/→ tab   1-9 jump   space play/pause   +/- volume   m mute   q quit",

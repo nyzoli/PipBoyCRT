@@ -967,6 +967,23 @@ impl Module for Mail {
     fn describe(&self) -> &'static str {
         "Your inbox through the Himalaya CLI (read-only)"
     }
+    fn manual(&self) -> &'static str {
+        "\
+MAIL reads your inbox through the Himalaya CLI. Read-only on
+purpose: your credentials stay in Himalaya's own config, and
+this tab can neither send nor delete anything. Nothing you
+type here will ever reach a colleague at 2 in the morning.
+
+  ↑/↓   pick a message
+  enter open it
+  [ ]   previous or next mailbox
+  r     refresh now
+  esc / bksp        back to the list
+  ↑/↓ PgUp/PgDn     scroll the open message
+
+The unread count also rides in the header, so you can feel
+mildly guilty from any tab in the Pip-Boy."
+    }
     fn help(&self) -> &'static str {
         match self.reader {
             None => "↑/↓ select   enter read   [ ] mailbox   r refresh   1-9 tabs   q quit",

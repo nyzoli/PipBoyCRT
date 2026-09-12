@@ -541,6 +541,24 @@ impl Module for Music {
     fn describe(&self) -> &'static str {
         "Your music folder on the same mixer, with a VU"
     }
+    fn manual(&self) -> &'static str {
+        "\
+MUSIC browses the folder in [music] dir and plays what it
+finds there: mp3, aac/m4a, flac and wav, with its own VU.
+
+  ↑/↓      move through the folder
+  enter    open a folder, or play the track
+  ←/bksp   up one folder (← still changes tab at the root)
+  space    pause or resume
+  n / p    next or previous track
+  s        shuffle on and off, within the playlist
+  +/-      volume, kept apart from the radio's
+  r        re-read the folder after you added something
+
+It shares the mixer with RADIO, so starting one pauses the
+other. No cloud, no account, no algorithm deciding what you
+are in the mood for: just the files you already own."
+    }
     fn help(&self) -> &'static str {
         "↑/↓ select   enter open/play   ←/bksp up   space pause   n/p next/prev   s shuffle   +/- volume   r reread"
     }

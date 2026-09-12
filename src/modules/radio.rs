@@ -339,6 +339,23 @@ impl Module for Radio {
     fn describe(&self) -> &'static str {
         "Internet radio with ICY titles and a spectrum VU"
     }
+    fn manual(&self) -> &'static str {
+        "\
+RADIO plays the internet stations listed in [[radio.station]]
+in config.toml, with ICY track titles and a spectrum VU meter.
+
+  ↑/↓   pick a station
+  enter tune in to the selected one
+  space plays or pauses
+  +/-   the volume knob
+  m     mutes, for when the boss walks in
+  *     saves the current song to your notes, because
+        \"what was that track?\" has ruined enough evenings
+
+space, +, - and m answer from any tab, not just this one.
+RADIO and MUSIC share one mixer, so whichever you start
+politely pauses the other. No fighting over the speakers."
+    }
     fn help(&self) -> &'static str {
         "↑/↓ station   enter tune   space play/pause   +/- volume   m mute   * save track   q quit"
     }

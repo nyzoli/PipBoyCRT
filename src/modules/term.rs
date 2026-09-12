@@ -511,6 +511,25 @@ impl Module for Term {
     fn describe(&self) -> &'static str {
         "An embedded terminal (pwsh; run claude in it)"
     }
+    fn manual(&self) -> &'static str {
+        "\
+TERM is a real terminal inside the Pip-Boy - pwsh by default,
+whatever you put in [term] otherwise. Good for a quick
+command, or for running the claude CLI with the Vault-Tec
+persona shipped in the vault folder.
+
+  enter or i   attach the keyboard to it (the first attach
+               starts the process)
+  F12          release it back to the Pip-Boy; the key is
+               [term] release_key
+  PgUp/PgDn    scroll the scrollback while detached, and
+               shift+PgUp / shift+PgDn while attached
+  r            restart the process
+
+While attached every key belongs to the child - q, h and
+ctrl+c included. That is exactly why the release key is one
+key that means the same thing on every keyboard layout."
+    }
     fn help(&self) -> &'static str {
         if self.captured {
             self.help_captured

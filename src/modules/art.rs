@@ -623,6 +623,25 @@ impl Module for Art {
     fn describe(&self) -> &'static str {
         "ANSI art from 16colo.rs and ascii.live animations"
     }
+    fn manual(&self) -> &'static str {
+        "\
+ART shows ANSI art straight from the 16colo.rs scene archive
+and animations from ascii.live. Two modes; a swaps them.
+
+PICTURES
+  r     a random picture: random year, pack, then file
+  ↑/↓   previous or next file, loaded after a short pause
+  [ ]   previous or next pack of the year
+  enter load the selected file right now
+  PgUp/PgDn and ←/→   scroll a picture bigger than the pane
+                      (←/→ only while it really is wider)
+
+ANIMATIONS
+  ↑/↓   pick an animation     space  start or stop it
+
+Set line spacing to 0% in your terminal, or the block
+characters drift apart and the art quietly falls to pieces."
+    }
     fn help(&self) -> &'static str {
         match self.mode {
             Mode::Pictures => HELP_PICTURES,

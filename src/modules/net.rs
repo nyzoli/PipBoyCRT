@@ -396,6 +396,22 @@ impl Module for Net {
     fn describe(&self) -> &'static str {
         "Ping, traceroute and a Cloudflare speed test"
     }
+    fn manual(&self) -> &'static str {
+        "\
+NET keeps an eye on the wires: a running ping to your gateway
+and to the public resolvers, as sparklines with packet loss.
+
+  t     traceroute on and off - every hop between you and
+        the outside world, guilty parties included
+  s     start a Cloudflare speed test, down then up
+  esc   cancel a speed test that is still running
+
+Earlier runs are kept, so you can prove to yourself that the
+line really did used to be faster.
+
+  1-9   jump to a tab          space  play/pause the radio
+  +/-   volume"
+    }
     fn help(&self) -> &'static str {
         "t traceroute   s speedtest   1-9 tabs   space play/pause   +/- volume   q quit"
     }

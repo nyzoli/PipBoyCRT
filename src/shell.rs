@@ -11,7 +11,7 @@ use serde::Deserialize;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Paragraph, Tabs};
+use ratatui::widgets::{Block, BorderType, Clear, Paragraph, Tabs, Wrap};
 use ratatui::Frame;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
@@ -24,6 +24,42 @@ const OVERVIEW_HELP: &str = "1-9 tabs   space play/pause   +/- volume   m mute  
 const SETUP_TITLE: &str = "SETUP";
 const SETUP_HELP: &str = "↑/↓ select   space toggle   a all   1-9 tabs   q quit";
 const SETUP_HINT: &str = "disabled modules use no CPU or network";
+/// A lábléc végére fűzött súgó-emlékeztető, ha kifér.
+const HELP_HINT: &str = "   h help";
+/// A kézikönyv-ablak alsó sora.
+const MANUAL_HINT: &str = "h / esc / any key closes";
+const OVERVIEW_MANUAL: &str = "\
+OVERVIEW is the wall panel: the important part of every tab at
+once. Compact stats, the big clock and quest timer, weather,
+the radio with its VU, news, mail, notes, Wi-Fi, syslog and
+the globe - whatever you left switched on in SETUP.
+
+The blocks arrange themselves: two columns above 100 columns
+wide, one below. Nothing here is interactive; for that, go to
+the tab itself.
+
+  1-9   jump to a tab     ←/→ Tab   next or previous tab
+  0     the SETUP tab
+  space play or pause the radio, from anywhere
+  +/-   volume            m  mute
+  h     this manual, on any tab
+  q     quit (esc never quits; tabs use it to step back)";
+const SETUP_MANUAL: &str = "\
+SETUP is the switchboard: every module with one line about
+what it does and a box saying whether it is switched on.
+
+  ↑/↓   pick a module
+  space or enter   switch it on or off
+  a     switch every module on
+  1-9   jump to a tab     0  come back here
+
+A disabled module has no tab, uses no CPU and opens no network
+connection - its background threads are never started at all.
+Switching one back on starts it there and then, and a module
+that already ran keeps its threads and its global keys.
+
+Every change is written to config.toml right away, so the
+Pip-Boy comes back tomorrow exactly as you left it.";
 /// A riasztás villogásának képkocka-sebessége (a v2 időzítő-animációjával azonos).
 const ALERT_FPS: u128 = 10;
 
@@ -55,6 +91,8 @@ pub struct Shell {
     notice: Option<String>,
     /// Villogó fejléc-cím a riasztás kezdetétől.
     alert: Option<(&'static str, Instant)>,
+    /// Nyitott kézikönyv-ablak a görgetési eltolásával.
+    manual: Option<u16>,
 }
 
 impl Shell {
@@ -81,6 +119,7 @@ impl Shell {
             tab: 0,
             notice: notice.or(err),
             alert: None,
+            manual: None,
         }
     }
 
@@ -196,6 +235,16 @@ impl Shell {
 
     /// Aktív modul → minden modul `on_global_key` → héj. `true` = kilépés.
     fn on_key(&mut self, key: KeyEvent) -> bool {
+        // A nyitott kézikönyv mindent elnyel: egy tévedésből leütött `q` sem
+        // léphet ki alóla, csak a görgetés megy át.
+        if let Some(scroll) = self.manual {
+            self.manual = match key.code {
+                KeyCode::Up => Some(scroll.saturating_sub(1)),
+                KeyCode::Down => Some(scroll.saturating_add(1).min(self.manual_max_scroll())),
+                _ => None,
+            };
+            return false;
+        }
         self.notice = None;
         if self.tab == self.setup_tab() {
             if self.setup_key(key) {
@@ -241,6 +290,7 @@ impl Shell {
     fn shell_key(&mut self, key: KeyEvent) -> bool {
         let visible = self.visible_tabs();
         match key.code {
+            KeyCode::Char('h') => self.manual = Some(0),
             KeyCode::Char('q') => return true,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return true,
             KeyCode::Left | KeyCode::BackTab => self.step(&visible, -1),
@@ -354,6 +404,9 @@ impl Shell {
             self.modules[self.tab - 1].draw(f, body, t);
         }
         self.draw_footer(f, footer);
+        if let Some(scroll) = self.manual {
+            self.draw_manual(f, inner, scroll);
+        }
     }
 
     fn draw_tabs(&self, f: &mut Frame, area: Rect) {
@@ -521,9 +574,57 @@ impl Shell {
         };
         let text = match &self.notice {
             Some(n) => format!(" {n}"),
-            None => format!(" {help}"),
+            None => {
+                // A `h help` emlékeztető a modulok `help()` sorai helyett itt
+                // készül — egy helyen, és csak ha tényleg kifér.
+                let mut s = format!(" {help}");
+                if s.chars().count() + HELP_HINT.len() <= area.width as usize {
+                    s.push_str(HELP_HINT);
+                }
+                s
+            }
         };
         f.render_widget(Paragraph::new(text).style(self.theme.frame), area);
+    }
+
+    /// Az aktív fül kézikönyve; OVERVIEW-é és SETUP-é a héjé.
+    fn manual_text(&self) -> &'static str {
+        match self.tab {
+            0 => OVERVIEW_MANUAL,
+            t if t == self.setup_tab() => SETUP_MANUAL,
+            t => self.modules[t - 1].manual(),
+        }
+    }
+
+    /// ponytail: a forrássorok száma a felső korlát, nem a tördelt soroké — a
+    /// doboz legfeljebb 74 oszlop, a sorok legfeljebb 70 karakter, így alig
+    /// tördel. Ha kellene, a `draw_manual` tördelt sorszáma jöhet ide egy `Cell`-ben.
+    fn manual_max_scroll(&self) -> u16 {
+        self.manual_text().lines().count().saturating_sub(1) as u16
+    }
+
+    /// Középre zárt kézikönyv-ablak az aktuális fül fölött.
+    fn draw_manual(&self, f: &mut Frame, area: Rect, scroll: u16) {
+        let t = self.theme;
+        let text = self.manual_text();
+        let lines = text.lines().count() as u16;
+        let w = area.width.saturating_sub(6).min(74);
+        let h = area.height.saturating_sub(4).min(lines + 4);
+        let [row] = Layout::vertical([Constraint::Length(h)]).flex(Flex::Center).areas(area);
+        let [popup] = Layout::horizontal([Constraint::Length(w)]).flex(Flex::Center).areas(row);
+        f.render_widget(Clear, popup);
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(t.frame)
+            .title(Line::from(Span::styled(format!(" MANUAL · {} ", self.tab_title(self.tab)), t.title)));
+        let inner = block.inner(popup);
+        f.render_widget(block, popup);
+        let [body, hint] = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+        f.render_widget(
+            Paragraph::new(text).style(t.text).wrap(Wrap { trim: false }).scroll((scroll, 0)),
+            body,
+        );
+        f.render_widget(Paragraph::new(MANUAL_HINT).style(t.frame).centered(), hint);
     }
 }
 
@@ -668,6 +769,9 @@ mod tests {
         }
         fn describe(&self) -> &'static str {
             "a fake module for the shell tests"
+        }
+        fn manual(&self) -> &'static str {
+            "FAKE MANUAL\nsecond line of the fake manual"
         }
         fn start(&mut self, _ctx: &Ctx) {
             self.log.lock().unwrap().starts.push(self.id);
@@ -1071,5 +1175,140 @@ mod tests {
         assert!(screen.contains("a fake module for the shell tests"), "describe() látszik: {screen}");
         assert!(screen.contains(SETUP_HINT), "{screen}");
         assert!(screen.contains("space toggle"), "a SETUP súghatója: {screen}");
+    }
+
+    // ---- kézikönyv-ablak ----
+
+    fn screen_of(s: &Shell, w: u16, h: u16) -> String {
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
+        term.draw(|f| s.draw(f)).unwrap();
+        (0..h)
+            .map(|y| (0..w).map(|x| term.backend().buffer()[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn h_opens_the_manual_overlay_and_h_closes_it() {
+        let log = Arc::new(Mutex::new(Log::default()));
+        let (mut s, _n) = shell(two_fakes(&log));
+        s.tab = 1;
+        assert!(!screen_of(&s, 100, 24).contains("FAKE MANUAL"), "csukva nem látszik");
+
+        s.on_key(key(KeyCode::Char('h')));
+        assert_eq!(s.manual, Some(0));
+        let open = screen_of(&s, 100, 24);
+        assert!(open.contains("FAKE MANUAL"), "{open}");
+        assert!(open.contains("second line of the fake manual"), "{open}");
+        assert!(open.contains("MANUAL · A"), "a fül neve a címben: {open}");
+        assert!(open.contains(MANUAL_HINT), "{open}");
+
+        s.on_key(key(KeyCode::Char('h')));
+        assert_eq!(s.manual, None);
+        assert!(!screen_of(&s, 100, 24).contains("FAKE MANUAL"));
+    }
+
+    #[test]
+    fn an_open_manual_swallows_every_key_including_q() {
+        let log = Arc::new(Mutex::new(Log::default()));
+        let (mut s, _n) = shell(two_fakes(&log));
+        s.start_enabled();
+        s.tab = 1;
+        s.on_key(key(KeyCode::Char('h')));
+        log.lock().unwrap().local.clear();
+        log.lock().unwrap().global.clear();
+
+        assert!(!s.on_key(key(KeyCode::Char('q'))), "a q nem lép ki, csak becsukja");
+        assert_eq!(s.manual, None);
+        assert_eq!(s.tab, 1, "és nem is vált fület");
+        let l = log.lock().unwrap();
+        assert!(l.local.is_empty() && l.global.is_empty(), "a modulok nem látják a kulcsot");
+    }
+
+    #[test]
+    fn a_module_that_consumes_h_keeps_the_overlay_closed() {
+        let log = Arc::new(Mutex::new(Log::default()));
+        let mut a = Fake::new("a", "A", log.clone());
+        a.eats = Some(KeyCode::Char('h'));
+        let (mut s, _n) = shell(vec![Box::new(a), Box::new(Fake::new("b", "B", log.clone()))]);
+        s.tab = 1;
+        s.on_key(key(KeyCode::Char('h')));
+        assert_eq!(s.manual, None, "a TERM/NOTES-modell: az aktív modul elfogyasztotta");
+        s.tab = 2;
+        s.on_key(key(KeyCode::Char('h')));
+        assert_eq!(s.manual, Some(0), "a szomszéd fülön viszont nyílik");
+    }
+
+    #[test]
+    fn manual_overlay_draws_at_extreme_sizes() {
+        let log = Arc::new(Mutex::new(Log::default()));
+        let (mut s, _n) = shell(two_fakes(&log));
+        for tab in [0usize, 1, 3] {
+            s.tab = tab;
+            s.manual = Some(0);
+            for (w, h) in [(1u16, 1u16), (40, 12), (39, 11), (80, 24), (200, 60)] {
+                screen_of(&s, w, h);
+            }
+        }
+    }
+
+    #[test]
+    fn manual_scroll_clamps_at_both_ends() {
+        let log = Arc::new(Mutex::new(Log::default()));
+        let (mut s, _n) = shell(two_fakes(&log));
+        s.tab = 1; // a Fake kézikönyve két sor
+        s.on_key(key(KeyCode::Char('h')));
+        s.on_key(key(KeyCode::Up));
+        assert_eq!(s.manual, Some(0), "0 alá nem megy");
+        for _ in 0..10 {
+            s.on_key(key(KeyCode::Down));
+        }
+        assert_eq!(s.manual, Some(1), "a sorok száma a korlát");
+        assert!(screen_of(&s, 100, 24).contains("second line"), "görgetve is látszik valami");
+    }
+
+    #[test]
+    fn the_footer_offers_the_manual_when_it_fits() {
+        let log = Arc::new(Mutex::new(Log::default()));
+        let (mut s, _n) = shell(two_fakes(&log));
+        s.tab = 1;
+        assert!(screen_of(&s, 100, 24).contains("h help"), "széles ablakban kifér");
+        let narrow = screen_of(&s, 40, 12);
+        assert!(narrow.contains("fake"), "a help() maga megmarad: {narrow}");
+    }
+
+    /// Minden valódi modulnak van kézikönyve, és minden sora belefér a dobozba.
+    #[test]
+    fn every_module_has_a_manual_within_the_line_budget() {
+        let registry: Vec<Box<dyn Module>> = vec![
+            Box::new(crate::modules::stat::Stat::new()),
+            Box::new(crate::modules::weather::Weather::new()),
+            Box::new(crate::modules::radio::Radio::new()),
+            Box::new(crate::modules::music::Music::new()),
+            Box::new(crate::modules::net::Net::new()),
+            Box::new(crate::modules::wifi::Wifi::new()),
+            Box::new(crate::modules::wasteland::Wasteland::new()),
+            Box::new(crate::modules::clock::Clock::new()),
+            Box::new(crate::modules::dosimeter::Dosimeter::new()),
+            Box::new(crate::modules::news::News::new()),
+            Box::new(crate::modules::mail::Mail::new()),
+            Box::new(crate::modules::notes::Notes::new()),
+            Box::new(crate::modules::syslog::Syslog::new()),
+            Box::new(crate::modules::art::Art::new()),
+            Box::new(crate::modules::globe::Globe::new()),
+            Box::new(crate::modules::term::Term::new()),
+        ];
+        let check = |title: &str, text: &str| {
+            assert!(!text.trim().is_empty(), "{title}: üres kézikönyv");
+            for line in text.lines() {
+                let n = line.chars().count();
+                assert!(n <= 70, "{title}: {n} karakteres sor: {line:?}");
+            }
+        };
+        for m in &registry {
+            check(m.title(), m.manual());
+        }
+        check(OVERVIEW_TITLE, OVERVIEW_MANUAL);
+        check(SETUP_TITLE, SETUP_MANUAL);
     }
 }

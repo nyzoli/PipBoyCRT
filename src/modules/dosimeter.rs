@@ -757,6 +757,22 @@ impl Module for Dosimeter {
     fn describe(&self) -> &'static str {
         "Screen time as a radiation dose — 45 minutes on, 15 off"
     }
+    fn manual(&self) -> &'static str {
+        "\
+DOSIMETER measures the only radiation you are actually taking:
+screen time. The RADS readout climbs while you sit here, a
+24-hour strip shows the day, and the rule is simple - 45
+minutes on, 15 minutes off.
+
+  z     snooze the alert for 5 minutes
+  r     drop the running session and start clean
+  1-9   jump to a tab
+
+When the dose goes critical a Geiger burst fires and any key
+on this tab dismisses it. That is not Vault-Tec being
+dramatic; it is your spine filing a formal complaint.
+Stand up. The terminal will still be here."
+    }
 
     fn start(&mut self, ctx: &Ctx) {
         let (cfg, notice) = ctx.config.section::<DoseCfg>(self.id());

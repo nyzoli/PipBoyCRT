@@ -284,6 +284,23 @@ impl Module for News {
     fn describe(&self) -> &'static str {
         "Hacker News and your RSS feeds, with a reader"
     }
+    fn manual(&self) -> &'static str {
+        "\
+NEWS is the Hacker News front page plus every RSS and Atom
+feed you listed in [news], with a reader built in.
+
+  ↑/↓   pick an item
+  [ ]   previous or next source
+  enter read it here; in the reader, enter fetches the full
+        article when the feed only handed over a teaser
+  o     open it in your browser
+  r     refresh now
+  esc / bksp        back to the list
+  ↑/↓ PgUp/PgDn     scroll the open article
+
+No infinite scroll, no recommendations, no comment section.
+The pre-war news was worse. Probably."
+    }
     fn help(&self) -> &'static str {
         match self.view {
             View::List => "↑/↓ select   [ ] source   enter read   o browser   r refresh   1-9 tabs   q quit",

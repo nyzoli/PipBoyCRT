@@ -674,6 +674,22 @@ impl Module for Syslog {
     fn describe(&self) -> &'static str {
         "Windows event-log errors and warnings"
     }
+    fn manual(&self) -> &'static str {
+        "\
+SYSLOG is the last 24 hours of Windows event-log errors and
+warnings in one list, with the full details one key away.
+
+  ↑/↓   pick an event    PgUp/PgDn  page through the list
+  enter open the details
+  l     level filter: errors only, or errors and warnings
+  r     refresh now
+  esc / bksp             back to the list
+  ↑/↓ PgUp/PgDn          scroll the open event
+
+Most of these have been failing quietly for months and the
+machine still boots. That is either reassuring or deeply
+unsettling, and Vault-Tec declines to say which."
+    }
     fn help(&self) -> &'static str {
         match self.detail {
             None => "↑/↓ select   enter details   l level   r refresh   1-9 tabs   q quit",
