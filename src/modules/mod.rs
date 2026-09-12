@@ -2,8 +2,6 @@
 //! Lásd `docs/adding-a-module.md`.
 pub mod art;
 pub mod clock;
-// The registry line in main.rs lands with the coordinator's wiring.
-#[allow(dead_code)]
 pub mod dosimeter;
 pub mod globe;
 pub mod mail;
