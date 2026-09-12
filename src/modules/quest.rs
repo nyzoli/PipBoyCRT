@@ -41,6 +41,27 @@ const MAX_PAGE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_HISTORY: usize = 50;
 const DICE_SPIN: Duration = Duration::from_millis(600);
 
+/// The hint that lives at the bottom of the Action Chart panel. Two lines
+/// because the chart column is 30 cells wide.
+const SHEET_HINT: &str = " tab next \u{b7} +/- change \u{b7} i add item\n x remove selected \u{b7} esc close";
+
+/// Shown once at the start of a new game: the Pip-Boy is the dice, the player
+/// is the chart.
+const INTRO: [&str; 6] = [
+    "This is a paper gamebook on a holotape.",
+    "The book tells you what happens; you keep the",
+    "Action Chart yourself: a opens it, tab picks a",
+    "field, +/- changes it, i adds an item, x removes",
+    "one. The Pip-Boy only rolls the dice and does the",
+    "combat maths. Every move is saved.",
+];
+
+/// The caption above the spinning digit.
+const DICE_TITLE: &str = "Random Number Table";
+
+/// The same reminder, once per session, on the first section you open.
+const CHART_REMINDER: &str = "\u{25b6} Remember: you keep the chart yourself \u{2014} a opens it";
+
 /// The Lone Wolf books the library knows out of the box: title, Project Aon
 /// code, number of numbered sections. Verified against
 /// `https://www.projectaon.org/en/xhtml/lw/<code>/sect<N>.htm` (N+1 is 404).
@@ -753,12 +774,11 @@ impl Combat {
         sheet.endurance = sheet.endurance.max(0);
         let fmt = |v: u8| if v == KILL { "K".to_string() } else { v.to_string() };
         let line = format!(
-            "ratio {ratio:+} \u{b7} pick {random} \u{b7} {} -{} (E {}) \u{b7} you -{} (E {})",
-            self.enemy.enemy,
-            fmt(e_loss),
-            self.enemy_endurance,
+            "pick {random} \u{b7} you \u{2212}{} (END {}) \u{b7} enemy \u{2212}{} (END {})",
             fmt(lw_loss),
-            sheet.endurance
+            sheet.endurance,
+            fmt(e_loss),
+            self.enemy_endurance
         );
         self.log.push(line.clone());
         if self.log.len() > 30 {
@@ -824,6 +844,8 @@ enum View {
 
 /// A modal on top of the play view; at most one is open at a time.
 enum Modal {
+    /// "HOW THIS WORKS", shown once at the start of a new game.
+    Intro,
     Picker { chosen: Vec<usize>, sel: usize },
     Prompt { label: &'static str, text: String },
     Combat(Combat),
@@ -832,6 +854,80 @@ enum Modal {
 struct Dice {
     started: Instant,
     value: u8,
+}
+
+/// What the current section is waiting for before the choices unlock.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Pending {
+    Combat,
+    Roll,
+}
+
+/// The digits a choice sentence claims for itself: `0–4` and `1 to 3` expand to
+/// a range, `0, 1 or 2` to a list, a lone `7` to itself. Everything from
+/// `turn to` on is ignored, so the target number is never mistaken for a pick.
+/// `None` when the sentence names no single-digit number at all.
+pub fn choice_numbers(text: &str) -> Option<Vec<u8>> {
+    let lower = text.to_ascii_lowercase();
+    let head = match lower.find("turn to") {
+        Some(i) => &lower[..i],
+        None => &lower[..],
+    };
+    let chars: Vec<char> = head.chars().collect();
+    let mut nums: Vec<u8> = Vec::new();
+    let mut range_from: Option<u8> = None;
+    let mut i = 0usize;
+    while i < chars.len() {
+        if !chars[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < chars.len() && chars[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i - start > 1 {
+            // 12, 350: a section number, not a Random Number Table pick.
+            range_from = None;
+            continue;
+        }
+        let d = chars[start] as u8 - b'0';
+        match range_from.take() {
+            Some(a) => {
+                for v in a.min(d)..=a.max(d) {
+                    if !nums.contains(&v) {
+                        nums.push(v);
+                    }
+                }
+            }
+            None => {
+                if !nums.contains(&d) {
+                    nums.push(d);
+                }
+            }
+        }
+        // A dash or the word "to" right after the digit opens a range.
+        let mut j = i;
+        while j < chars.len() && chars[j].is_whitespace() {
+            j += 1;
+        }
+        if matches!(chars.get(j), Some('-' | '\u{2013}' | '\u{2014}')) {
+            range_from = Some(d);
+            i = j + 1;
+        } else if chars.get(j) == Some(&'t') && chars.get(j + 1) == Some(&'o') && chars.get(j + 2).is_some_and(|c| c.is_whitespace()) {
+            range_from = Some(d);
+            i = j + 2;
+        }
+    }
+    (!nums.is_empty()).then_some(nums)
+}
+
+/// Which choice a Random Number Table pick decides, if any of them says so.
+pub fn roll_target(section: &Section, roll: u8) -> Option<usize> {
+    section
+        .choices
+        .iter()
+        .position(|c| choice_numbers(&c.text).is_some_and(|n| n.contains(&roll)))
 }
 
 pub struct Quest {
@@ -848,6 +944,17 @@ pub struct Quest {
     sheet_on: bool,
     page_key: &'static str,
     modal: Option<Modal>,
+    /// What this section visit still owes: a fight or a number. Until it is
+    /// `None` the choices are dimmed and the digit keys do nothing.
+    pending: Option<Pending>,
+    /// The last Random Number Table pick made in this section.
+    last_roll: Option<u8>,
+    /// `x` was pressed once; a second one removes the selected item.
+    x_confirm: bool,
+    /// The "you keep the chart" reminder has not been shown yet this session.
+    reminder_pending: bool,
+    /// ... and this section visit is the one showing it.
+    show_reminder: bool,
     dice: Option<Dice>,
     rng: Rng,
     downloading: Option<(String, usize, usize)>,
@@ -879,6 +986,11 @@ impl Quest {
             sheet_on: false,
             page_key: "gamerulz",
             modal: None,
+            pending: None,
+            last_roll: None,
+            x_confirm: false,
+            reminder_pending: true,
+            show_reminder: false,
             dice: None,
             rng: Rng::default(),
             downloading: None,
@@ -1012,9 +1124,8 @@ impl Quest {
                 }));
                 self.book = Some(book);
                 self.view = View::Play;
-                self.scroll = 0;
-                self.choice_sel = 0;
                 self.modal = None;
+                self.enter_section();
             }
             Err(e) => {
                 let _ = ctx.notify.send(Notice::Footer(format!("quest: {e}")));
@@ -1053,19 +1164,73 @@ impl Quest {
             g.goto(target);
             g.log_line(format!("\u{2192} {target}"));
         }
+        self.modal = None;
+        self.enter_section();
+        self.save_game(ctx);
+    }
+
+    /// Arriving at a section: reset the view and work out what the section
+    /// wants from the player before the choices become live.
+    // ponytail: a section that asks for both a fight and a number only tracks
+    // the fight; the guidance line still names the second step afterwards.
+    fn enter_section(&mut self) {
         self.scroll = 0;
         self.choice_sel = 0;
-        self.modal = None;
-        self.save_game(ctx);
+        self.last_roll = None;
+        self.show_reminder = std::mem::take(&mut self.reminder_pending);
+        self.pending = match self.section() {
+            Some(s) if !s.combat.is_empty() => Some(Pending::Combat),
+            Some(s) if s.random => Some(Pending::Roll),
+            _ => None,
+        };
     }
 
     /// `1`-`9` (and Enter on the highlighted row) take a choice.
     fn take_choice(&mut self, idx: usize, ctx: &Ctx) -> bool {
+        if let Some(p) = self.pending {
+            let _ = ctx.notify.send(Notice::Footer(match p {
+                Pending::Combat => "quest: fight first \u{2014} press c".into(),
+                Pending::Roll => "quest: pick a number first \u{2014} press r".to_string(),
+            }));
+            return false;
+        }
         let Some(target) = self.section().and_then(|s| s.choices.get(idx)).map(|c| c.target) else {
             return false;
         };
         self.goto(target, ctx);
         true
+    }
+
+    /// The highlighted "what now" line under the section text.
+    fn guidance(&self) -> String {
+        let (Some(game), Some(s)) = (&self.game, self.section()) else {
+            return String::new();
+        };
+        if game.sheet.endurance <= 0 {
+            return "\u{25b6} Endurance 0 \u{2014} you died: n for a new game, b to go back".into();
+        }
+        match self.pending {
+            Some(Pending::Combat) => {
+                let e = &s.combat[0];
+                format!("\u{25b6} Fight: press c to open combat ({} \u{b7} CS {} \u{b7} END {})", e.enemy, e.combat_skill, e.endurance)
+            }
+            Some(Pending::Roll) => "\u{25b6} Pick a number: press r".into(),
+            None if s.choices.is_empty() => "\u{25b6} The End \u{2014} n for a new game, b to go back".into(),
+            None if !s.combat.is_empty() => "\u{25b6} Combat won \u{2014} choose below".into(),
+            None => match self.last_roll {
+                Some(n) => format!("\u{25b6} You picked {n} \u{2014} now choose below"),
+                None if s.choices.len() == 1 => "\u{25b6} Choose 1 below".into(),
+                None => format!("\u{25b6} Choose 1\u{2013}{} below", s.choices.len().min(9)),
+            },
+        }
+    }
+
+    /// What a landed die means here, for the dice modal's caption.
+    fn roll_meaning(&self, value: u8) -> String {
+        match self.section().and_then(|s| roll_target(s, value).map(|i| s.choices[i].target)) {
+            Some(t) => format!("you picked {value} \u{2192} turn to {t}"),
+            None => format!("you picked {value}"),
+        }
     }
 
     fn new_game(&mut self, ctx: &Ctx) {
@@ -1082,9 +1247,9 @@ impl Quest {
         };
         game.log_line(format!("new game \u{b7} COMBAT SKILL {cs} \u{b7} ENDURANCE {en}"));
         self.game = Some(game);
-        self.scroll = 0;
-        self.choice_sel = 0;
-        self.modal = if book.disciplines.is_empty() { None } else { Some(Modal::Picker { chosen: Vec::new(), sel: 0 }) };
+        self.enter_section();
+        // The house rules first, the disciplines after (see `key_intro`).
+        self.modal = Some(Modal::Intro);
         self.save_game(ctx);
     }
 
@@ -1366,15 +1531,40 @@ impl Module for Quest {
         "Gamebooks on a holotape: Lone Wolf from Project Aon, or your own"
     }
 
+    fn manual(&self) -> &'static str {
+        "\
+QUEST is a paper gamebook on a holotape: the book tells you
+what happens, you keep the Action Chart yourself.
+
+  ↑/↓ enter   library: pick a book and open it
+  d / r       download a Lone Wolf book / rescan the folder
+  1-9         take a choice (here the digits belong to the
+              tab, not to the shell) - ↑/↓ + enter also works
+  b / n / l   step back / new game / reload the save
+  r / c       roll a number / open the combat panel
+  m / ? / esc map / rules / back to the library
+
+The ▶ line under the text says what to do right now. While a
+fight or a roll is owed, the choices stay dim and do nothing.
+
+Action Chart: a opens it, tab walks the fields, +/- changes a
+number, i adds an item, x removes one (x twice to confirm).
+Nothing is written for you: the book says it, you record it.
+
+The books come from Project Aon, downloaded to your own
+machine for personal use - thank Joe Dever."
+    }
+
     fn help(&self) -> &'static str {
         match (&self.modal, self.view) {
+            (Some(Modal::Intro), _) => "enter to continue",
             (Some(Modal::Picker { .. }), _) => "\u{2191}/\u{2193} move   space pick 5   enter confirm   esc cancel   q quit",
             (Some(Modal::Prompt { .. }), _) => "type the item   enter save   esc cancel",
             (Some(Modal::Combat(_)), _) => "enter/r fight a round   e evade   esc close   q quit",
             (None, View::Library) => "\u{2191}/\u{2193} select   enter open   d download   r rescan   1-9 tabs   q quit",
             (None, View::Page) => "\u{2191}/\u{2193} scroll   esc back   1-9 tabs   q quit",
             (None, View::Play) => {
-                "1-9 choose (tab keys are the module's here)   \u{2191}/\u{2193}+enter   b back   r dice   c combat   n new   a sheet   tab/+/- stat   i item   x clear   l load   m map   ? rules   esc library"
+                "1-9 choose (tab keys are the module's here)   \u{2191}/\u{2193}+enter   b back   r dice   c combat   n new   a chart   tab/+/- stat   i item   x x remove   l load   m map   ? rules   esc library"
             }
         }
     }
@@ -1465,6 +1655,16 @@ impl Module for Quest {
                         c.round(&mut g.sheet, value);
                     }
                     self.save_game(ctx);
+                    return true;
+                }
+                self.last_roll = Some(value);
+                if self.pending == Some(Pending::Roll) {
+                    self.pending = None;
+                }
+                // A choice that names this number is pre-selected; the player
+                // still presses it.
+                if let Some(i) = self.section().and_then(|s| roll_target(s, value)) {
+                    self.choice_sel = i;
                 }
                 return true;
             }
@@ -1472,6 +1672,13 @@ impl Module for Quest {
                 || matches!(key.code, KeyCode::Char(c) if c.is_ascii_digit());
         }
         match self.modal.take() {
+            Some(Modal::Intro) => {
+                // Any key moves on; the disciplines (if any) come next.
+                if self.book.as_ref().is_some_and(|b| !b.disciplines.is_empty()) {
+                    self.modal = Some(Modal::Picker { chosen: Vec::new(), sel: 0 });
+                }
+                return true;
+            }
             Some(Modal::Picker { chosen, sel }) => return self.key_picker(key, chosen, sel, ctx),
             Some(Modal::Prompt { label, text }) => return self.key_prompt(key, label, text, ctx),
             Some(Modal::Combat(c)) => return self.key_combat(key, c, ctx),
@@ -1494,7 +1701,12 @@ impl Module for Quest {
             View::Play => self.draw_play(f, area, t),
         }
         if let Some(d) = &self.dice {
-            draw_dice(f, area, t, d.value);
+            let caption = if d.started.elapsed() >= DICE_SPIN {
+                self.roll_meaning(d.value)
+            } else {
+                "rolling\u{2026}".to_string()
+            };
+            draw_dice(f, area, t, d.value, &caption);
         }
     }
 
@@ -1595,6 +1807,8 @@ impl Quest {
 
     fn key_play(&mut self, key: KeyEvent, ctx: &Ctx) -> bool {
         let choices = self.section().map(|s| s.choices.len()).unwrap_or(0);
+        // Any key that is not a second `x` cancels the pending removal.
+        let confirm_x = std::mem::take(&mut self.x_confirm);
         match key.code {
             // Digits are the shell's tab keys everywhere else; the play view
             // consumes them so `3` picks the third choice.
@@ -1624,12 +1838,9 @@ impl Quest {
                 true
             }
             KeyCode::Char('b') => {
-                if let Some(g) = self.game.as_mut() {
-                    if g.back() {
-                        self.scroll = 0;
-                        self.choice_sel = 0;
-                        self.save_game(ctx);
-                    }
+                if self.game.as_mut().is_some_and(Game::back) {
+                    self.enter_section();
+                    self.save_game(ctx);
                 }
                 true
             }
@@ -1671,16 +1882,20 @@ impl Quest {
                 true
             }
             KeyCode::Char('x') => {
-                self.clear_item();
-                self.save_game(ctx);
+                if confirm_x {
+                    self.clear_item();
+                    self.save_game(ctx);
+                } else {
+                    self.x_confirm = true;
+                    let _ = ctx.notify.send(Notice::Footer("quest: press x again to remove the selected item".into()));
+                }
                 true
             }
             KeyCode::Char('l') => {
                 if let Some(book) = &self.book {
                     if let Some(g) = self.load_saves(ctx).get(&book.key) {
                         self.game = Some(g.clone());
-                        self.scroll = 0;
-                        self.choice_sel = 0;
+                        self.enter_section();
                     }
                 }
                 true
@@ -1698,8 +1913,13 @@ impl Quest {
                 true
             }
             KeyCode::Esc | KeyCode::Backspace => {
-                self.view = View::Library;
-                self.scan(ctx);
+                // esc closes the Action Chart first, as its hint line promises.
+                if self.sheet_on {
+                    self.sheet_on = false;
+                } else {
+                    self.view = View::Library;
+                    self.scan(ctx);
+                }
                 true
             }
             _ => false,
@@ -1780,12 +2000,23 @@ impl Quest {
             }
             _ => {}
         }
+        // Slain, evaded or dead: the section's choices are live again.
+        if c.over.is_some() {
+            self.pending = None;
+        }
         self.modal = Some(Modal::Combat(c));
         true
     }
 }
 
 // ------------------------------------------------------------------ draw ---
+
+/// `[####------]`: how much of `max` is left. A 10-cell bar, empty when the
+/// maximum is nonsense (a book could name an enemy with 0 ENDURANCE).
+fn bar(cur: i32, max: i32) -> String {
+    let filled = if max > 0 { (cur.clamp(0, max) * 10 / max) as usize } else { 0 };
+    format!("[{}{}]", "\u{2588}".repeat(filled), "\u{b7}".repeat(10 - filled))
+}
 
 fn clip(s: &str, w: usize) -> String {
     if s.chars().count() <= w {
@@ -1866,6 +2097,12 @@ impl Quest {
         }
         if let Some(modal) = &self.modal {
             match modal {
+                Modal::Intro => {
+                    let mut lines: Vec<String> = INTRO.iter().map(|s| (*s).to_string()).collect();
+                    lines.push(String::new());
+                    lines.push("enter to continue".into());
+                    draw_panel(f, area, t, "HOW THIS WORKS", &lines);
+                }
                 Modal::Picker { chosen, sel } => self.draw_picker(f, area, t, chosen, *sel),
                 Modal::Prompt { label, text } => draw_prompt(f, area, t, label, text),
                 Modal::Combat(c) => self.draw_combat(f, area, t, c),
@@ -1882,23 +2119,48 @@ impl Quest {
         };
         f.render_widget(Paragraph::new(Line::from(Span::styled(clip(&header, area.width as usize), t.title))), rows[0]);
 
-        let body = Layout::vertical([Constraint::Min(0), Constraint::Length(self.choice_rows(rows[1].height))]).split(rows[1]);
+        let mut guide: Vec<String> = Vec::new();
+        if self.show_reminder {
+            guide.push(CHART_REMINDER.to_string());
+        }
+        let g = self.guidance();
+        if !g.is_empty() {
+            guide.push(g);
+        }
+        let guide_h = if rows[1].height >= 3 { guide.len().min(2) as u16 } else { 0 };
+        let body = Layout::vertical([
+            Constraint::Min(0),
+            Constraint::Length(guide_h),
+            Constraint::Length(self.choice_rows(rows[1].height)),
+        ])
+        .split(rows[1]);
         self.body_h.set(body[0].height);
         let text = match self.section() {
             Some(s) => s.text.join("\n\n"),
             None => "Press n for a new game, or esc for the library.".to_string(),
         };
         f.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }).scroll((self.scroll, 0)), body[0]);
+        if guide_h > 0 {
+            let w = body[1].width as usize;
+            let lines: Vec<Line<'static>> =
+                guide.iter().take(guide_h as usize).map(|g| Line::from(Span::styled(clip(&format!(" {g}"), w), t.warn))).collect();
+            f.render_widget(Paragraph::new(lines), body[1]);
+        }
 
         let mut lines: Vec<Line<'static>> = Vec::new();
         if let Some(s) = self.section() {
-            let w = body[1].width as usize;
+            let w = body[2].width as usize;
             for (i, c) in s.choices.iter().enumerate().take(9) {
-                let style = if i == self.choice_sel { t.tab_active } else { t.title };
+                // Locked choices stay readable but obviously inactive.
+                let style = match (self.pending.is_some(), i == self.choice_sel) {
+                    (true, _) => t.frame,
+                    (false, true) => t.tab_active,
+                    (false, false) => t.title,
+                };
                 lines.push(Line::from(Span::styled(clip(&format!(" {}) {}", i + 1, c.text), w), style)));
             }
         }
-        f.render_widget(Paragraph::new(lines), body[1]);
+        f.render_widget(Paragraph::new(lines), body[2]);
 
         let tail = match (&self.game, self.section()) {
             (Some(g), Some(s)) => {
@@ -1938,37 +2200,48 @@ impl Quest {
         let fields = Self::sheet_fields(s);
         let w = area.width as usize;
         let mut lines: Vec<Line<'static>> = vec![Line::from(Span::styled(" ACTION CHART", t.title))];
-        let row = |lines: &mut Vec<Line<'static>>, idx: Option<usize>, text: String| {
+        // `\u{25b6}` marks the field Tab is on; that is the only field a key
+        // can change, so that is the only row that carries its hint.
+        let row = |lines: &mut Vec<Line<'static>>, idx: Option<usize>, text: String, hint: &str| {
             let selected = idx.is_some_and(|i| i == self.sheet_sel);
-            let style = if selected { t.tab_active } else { t.value };
-            lines.push(Line::from(Span::styled(clip(&text, w), style)));
+            let (mark, style) = if selected { ("\u{25b6}", t.tab_active) } else { (" ", t.value) };
+            let hint = if selected { format!(" \u{b7} {hint}") } else { String::new() };
+            lines.push(Line::from(Span::styled(clip(&format!("{mark}{text}{hint}"), w), style)));
         };
         let find = |f: Field| fields.iter().position(|x| *x == f);
-        row(&mut lines, find(Field::Cs), format!(" COMBAT SKILL  {}", s.combat_skill));
-        row(&mut lines, find(Field::End), format!(" ENDURANCE     {}/{}", s.endurance, s.endurance_max));
-        row(&mut lines, find(Field::Gold), format!(" GOLD CROWNS   {}", s.gold));
-        row(&mut lines, find(Field::Meals), format!(" MEALS         {}", s.meals));
-        lines.push(Line::from(Span::styled(" WEAPONS", t.frame)));
+        let head = |lines: &mut Vec<Line<'static>>, text: String| {
+            lines.push(Line::from(Span::styled(clip(&text, w), t.frame)));
+        };
+        head(&mut lines, " STATS".into());
+        row(&mut lines, find(Field::Cs), format!("COMBAT SKILL {}", s.combat_skill), "+/- to change");
+        row(&mut lines, find(Field::End), format!("ENDURANCE {}/{}", s.endurance, s.endurance_max), "+/- to change");
+        row(&mut lines, find(Field::Gold), format!("GOLD {}", s.gold), "+/- to change");
+        row(&mut lines, find(Field::Meals), format!("MEALS {}", s.meals), "+/- to change");
+        head(&mut lines, " WEAPONS \u{b7} i add \u{b7} x remove".into());
         for i in 0..s.weapons.len().max(2) {
             let v = s.weapons.get(i).filter(|x| !x.is_empty()).cloned().unwrap_or_else(|| "\u{2014}".into());
-            row(&mut lines, find(Field::Weapon(i)), format!("  {v}"));
+            row(&mut lines, find(Field::Weapon(i)), format!(" {v}"), "i add \u{b7} x remove");
         }
-        lines.push(Line::from(Span::styled(" BACKPACK", t.frame)));
+        let used = s.backpack.iter().filter(|x| !x.is_empty()).count();
+        head(&mut lines, format!(" BACKPACK {used}/{} \u{b7} i add \u{b7} x remove", s.backpack.len().max(8)));
         for i in 0..s.backpack.len().max(8) {
             let v = s.backpack.get(i).filter(|x| !x.is_empty()).cloned().unwrap_or_else(|| "\u{2014}".into());
-            row(&mut lines, find(Field::Pack(i)), format!("  {v}"));
+            row(&mut lines, find(Field::Pack(i)), format!(" {v}"), "i add \u{b7} x remove");
         }
-        lines.push(Line::from(Span::styled(" SPECIAL ITEMS", t.frame)));
+        head(&mut lines, " SPECIAL ITEMS \u{b7} i add \u{b7} x remove".into());
         for i in 0..s.special.len() + 1 {
             let v = s.special.get(i).cloned().unwrap_or_else(|| "\u{2014}".into());
-            row(&mut lines, find(Field::Special(i)), format!("  {v}"));
+            row(&mut lines, find(Field::Special(i)), format!(" {v}"), "i add \u{b7} x remove");
         }
-        lines.push(Line::from(Span::styled(" KAI DISCIPLINES", t.frame)));
+        head(&mut lines, " KAI DISCIPLINES".into());
         if s.disciplines.is_empty() {
             lines.push(Line::from(Span::styled("  none picked \u{2014} n for a new game", t.frame)));
         }
         for d in &s.disciplines {
             lines.push(Line::from(Span::styled(clip(&format!("  {d}"), w), t.value)));
+        }
+        for h in SHEET_HINT.lines() {
+            lines.push(Line::from(Span::styled(clip(h, w), t.warn)));
         }
         lines.truncate(area.height.max(1) as usize);
         f.render_widget(Paragraph::new(lines), area);
@@ -1996,27 +2269,45 @@ impl Quest {
         let sheet = self.game.as_ref().map(|g| &g.sheet);
         let mut lines: Vec<String> = Vec::new();
         lines.push(format!(
-            "{} \u{b7} CS {} \u{b7} END {}/{}",
-            c.enemy.enemy, c.enemy.combat_skill, c.enemy_endurance, c.enemy.endurance
+            "{:<14.14} CS {:>2} END {} {}/{}",
+            c.enemy.enemy,
+            c.enemy.combat_skill,
+            bar(c.enemy_endurance, c.enemy.endurance),
+            c.enemy_endurance,
+            c.enemy.endurance
         ));
         if let Some(s) = sheet {
             lines.push(format!(
-                "you \u{b7} CS {}{} \u{b7} END {}/{}",
+                "{:<14.14} CS {:>2} END {} {}/{}",
+                "you",
                 s.combat_skill,
-                if c.mindblast { " +2 Mindblast" } else { "" },
+                bar(s.endurance, s.endurance_max),
                 s.endurance,
                 s.endurance_max
             ));
-            lines.push(format!("COMBAT RATIO {:+}", c.ratio(s)));
+            lines.push(format!(
+                "COMBAT RATIO {:+} \u{b7} you {}{} vs CS {}",
+                c.ratio(s),
+                s.combat_skill,
+                if c.mindblast { " +2 (Mindblast)" } else { "" },
+                c.enemy.combat_skill
+            ));
         }
         lines.push(String::new());
+        if c.log.is_empty() {
+            lines.push("no rounds fought yet".into());
+        }
         lines.extend(c.log.iter().cloned());
-        if let Some(over) = &c.over {
-            lines.push(String::new());
-            lines.push(over.clone());
-        } else if c.evadable {
-            lines.push(String::new());
-            lines.push("e to evade".to_string());
+        lines.push(String::new());
+        match &c.over {
+            Some(over) => {
+                lines.push(format!("\u{2588}\u{2588} {} \u{2588}\u{2588}", over.to_ascii_uppercase()));
+                lines.push("esc closes \u{b7} the choices below are live again".into());
+            }
+            None => lines.push(format!(
+                "enter fight a round \u{b7} e evade ({}) \u{b7} esc close",
+                if c.evadable { "allowed here" } else { "not here" }
+            )),
         }
         draw_panel(f, area, t, "COMBAT", &lines);
     }
@@ -2028,7 +2319,7 @@ fn draw_panel(f: &mut Frame, area: Rect, t: Theme, title: &str, lines: &[String]
     if area.width < 8 || area.height < 3 {
         return;
     }
-    let w = area.width.saturating_sub(4).max(4).min(60);
+    let w = area.width.saturating_sub(4).max(4).min(62);
     let h = (lines.len() as u16 + 2).min(area.height.saturating_sub(2)).max(3);
     let rect = Rect {
         x: area.x + (area.width.saturating_sub(w)) / 2,
@@ -2036,25 +2327,29 @@ fn draw_panel(f: &mut Frame, area: Rect, t: Theme, title: &str, lines: &[String]
         width: w,
         height: h,
     };
-    let mut out: Vec<Line<'static>> = vec![Line::from(Span::styled(clip(title, w as usize), t.title))];
-    for l in lines.iter().take(h.saturating_sub(1) as usize) {
-        out.push(Line::from(Span::styled(clip(l, w as usize), t.value)));
+    let block = ratatui::widgets::Block::bordered().border_style(t.frame).title(Span::styled(format!(" {title} "), t.title));
+    let inner = block.inner(rect);
+    let mut out: Vec<Line<'static>> = Vec::new();
+    for l in lines.iter().take(inner.height as usize) {
+        out.push(Line::from(Span::styled(clip(l, inner.width as usize), t.value)));
     }
     f.render_widget(ratatui::widgets::Clear, rect);
-    f.render_widget(Paragraph::new(out), rect);
+    f.render_widget(block, rect);
+    f.render_widget(Paragraph::new(out), inner);
 }
 
 fn draw_prompt(f: &mut Frame, area: Rect, t: Theme, label: &str, text: &str) {
-    draw_panel(f, area, t, label, &[format!("> {text}\u{2588}")]);
+    // NOTES' `TITLE>` prompt, with the module's own label.
+    draw_panel(f, area, t, label, &[format!("{label}> {text}\u{2588}"), String::new(), "enter save \u{b7} esc cancel".into()])
 }
 
 /// The Random Number Table pick as a big block digit.
-fn draw_dice(f: &mut Frame, area: Rect, t: Theme, value: u8) {
+fn draw_dice(f: &mut Frame, area: Rect, t: Theme, value: u8, caption: &str) {
     use crate::ui::bigfont;
     let text = (value % 10).to_string();
     let cols = bigfont::text_cols(&text);
     let Some(scale) = bigfont::fit_scale(area.width, area.height, cols) else {
-        let line = Line::from(Span::styled(format!(" random number: {value}"), t.title));
+        let line = Line::from(Span::styled(clip(&format!(" {DICE_TITLE}: {caption}"), area.width as usize), t.title));
         f.render_widget(Paragraph::new(line), Rect { height: 1.min(area.height), ..area });
         return;
     };
@@ -2072,6 +2367,19 @@ fn draw_dice(f: &mut Frame, area: Rect, t: Theme, value: u8) {
     let buf = f.buffer_mut();
     bigfont::blit(buf, area, x0 + 1, y0 + 1, &text, scale, t.frame, true);
     bigfont::blit(buf, area, x0, y0, &text, scale, t.title, false);
+    // A digit alone says nothing: name the table above it and the meaning below.
+    let mut band = |y: i32, s: &str, style: ratatui::style::Style| {
+        if y < area.y as i32 || y >= (area.y + area.height) as i32 {
+            return;
+        }
+        let text = clip(s, area.width as usize);
+        let w = text.chars().count() as u16;
+        let rect = Rect { x: area.x + area.width.saturating_sub(w) / 2, y: y as u16, width: w, height: 1 };
+        f.render_widget(ratatui::widgets::Clear, rect);
+        f.render_widget(Paragraph::new(Line::from(Span::styled(text, style))), rect);
+    };
+    band(y0 - 1, DICE_TITLE, t.frame);
+    band(y0 + ch as i32, caption, t.warn);
 }
 
 #[cfg(test)]
@@ -2148,8 +2456,23 @@ mod tests {
         let (b, problems) = parse_custom(EXAMPLE_CUSTOM, "vault-13");
         assert_eq!(b.key, "vault-13");
         assert_eq!(b.title, "Vault 13: The Water Chip Requisition");
-        assert!(b.sections.len() >= 8, "{} sections", b.sections.len());
+        assert!(b.sections.len() >= 36, "{} sections", b.sections.len());
         assert!(problems.is_empty(), "a well-formed book reports nothing: {problems:?}");
+        let endings = b.sections.iter().filter(|s| s.choices.is_empty()).count();
+        assert_eq!(endings, 3, "one good, one bad, one absurd");
+        assert!(b.sections.iter().filter(|s| !s.combat.is_empty()).count() >= 3);
+        assert!(b.sections.iter().filter(|s| s.random).count() >= 3, "random-number branches");
+        // Every enemy is beatable by a starting character.
+        for e in b.sections.iter().flat_map(|s| s.combat.iter()) {
+            assert!((8..=16).contains(&e.combat_skill) && (10..=24).contains(&e.endurance), "{e:?}");
+        }
+        // Every random branch names its picks in a form the parser understands.
+        for s in b.sections.iter().filter(|s| s.random) {
+            let covered: Vec<u8> = s.choices.iter().filter_map(|c| choice_numbers(&c.text)).flatten().collect();
+            for n in 0..=9u8 {
+                assert!(covered.contains(&n), "section {}: pick {n} decides nothing", s.number);
+            }
+        }
         // Section numbers are unique and every choice target exists.
         let nums: Vec<u32> = b.sections.iter().map(|s| s.number).collect();
         for s in &b.sections {
@@ -2332,7 +2655,182 @@ mod tests {
         q.book = Some(book);
         q.view = View::Play;
         q.dir = std::env::temp_dir().join("pipboy-quest-test-never-written");
+        q.enter_section();
         q
+    }
+
+    /// Moves the test game to a section without going through the play view.
+    fn at(q: &mut Quest, section: u32) {
+        q.game.as_mut().unwrap().section = section;
+        q.enter_section();
+    }
+
+    fn screen(q: &Quest, w: u16, h: u16) -> String {
+        let t = Theme::new(crate::config::ThemeKind::Color);
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| q.draw(f, f.area(), t)).unwrap();
+        term.backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<Vec<_>>()
+            .chunks(w as usize)
+            .map(|r| r.concat())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn choice_ranges_are_read_out_of_the_sentence() {
+        assert_eq!(choice_numbers("If it is 0\u{2013}4, turn to 10"), Some(vec![0, 1, 2, 3, 4]));
+        assert_eq!(choice_numbers("If it is 5-9, turn to 19"), Some(vec![5, 6, 7, 8, 9]));
+        assert_eq!(choice_numbers("If it is 0, 1 or 2, turn to 33"), Some(vec![0, 1, 2]));
+        assert_eq!(choice_numbers("If you pick 1 to 3"), Some(vec![1, 2, 3]));
+        assert_eq!(choice_numbers("If you pick 7, turn to 88"), Some(vec![7]));
+        // The target number is never mistaken for a pick.
+        assert_eq!(choice_numbers("Turn to 4"), None);
+        assert_eq!(choice_numbers("If you have the Water Chip"), None);
+        assert_eq!(choice_numbers("Take 13-C to the requisition desk"), None);
+    }
+
+    #[test]
+    fn a_roll_preselects_the_choice_it_decides() {
+        let s = Section {
+            number: 8,
+            random: true,
+            choices: vec![
+                Choice { text: "If it is 0\u{2013}4, turn to 10".into(), target: 10 },
+                Choice { text: "If it is 5-9, turn to 11".into(), target: 11 },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(roll_target(&s, 3), Some(0));
+        assert_eq!(roll_target(&s, 5), Some(1));
+        assert_eq!(roll_target(&Section::default(), 5), None);
+    }
+
+    #[test]
+    fn combat_and_dice_sections_lock_the_choices() {
+        let (ctx, _rx) = crate::shell::test_ctx(toml::Table::new());
+        let mut q = play_quest();
+        at(&mut q, 7); // the rad roach
+        assert_eq!(q.pending, Some(Pending::Combat));
+        assert!(q.guidance().starts_with("\u{25b6} Fight: press c"), "{}", q.guidance());
+        assert!(q.on_key(KeyEvent::from(KeyCode::Char('1')), &ctx), "the digit is still eaten");
+        assert_eq!(q.game.as_ref().unwrap().section, 7, "but it does not move");
+
+        // Fighting it out unlocks them again.
+        q.open_combat(&ctx);
+        for _ in 0..40 {
+            if q.pending.is_none() {
+                break;
+            }
+            q.on_key(KeyEvent::from(KeyCode::Enter), &ctx);
+        }
+        assert_eq!(q.pending, None, "the fight ended one way or the other");
+        let expected = if q.game.as_ref().unwrap().sheet.endurance <= 0 { "Endurance 0" } else { "Combat won" };
+        assert!(q.guidance().contains(expected), "{}", q.guidance());
+
+        // A dice section wants r, and the landed die unlocks it.
+        let mut q = play_quest();
+        at(&mut q, 8);
+        assert_eq!(q.pending, Some(Pending::Roll));
+        assert_eq!(q.guidance(), "\u{25b6} Pick a number: press r");
+        assert!(!q.take_choice(0, &ctx));
+        assert_eq!(q.game.as_ref().unwrap().section, 8);
+        q.dice = Some(Dice { started: Instant::now() - DICE_SPIN, value: 7 });
+        q.on_key(KeyEvent::from(KeyCode::Enter), &ctx);
+        assert_eq!(q.pending, None);
+        assert_eq!(q.last_roll, Some(7));
+        assert_eq!(q.choice_sel, 1, "7 falls in the 5-9 branch");
+        assert_eq!(q.guidance(), "\u{25b6} You picked 7 \u{2014} now choose below");
+        assert!(q.roll_meaning(7).contains("\u{2192} turn to"), "{}", q.roll_meaning(7));
+    }
+
+    #[test]
+    fn guidance_covers_the_plain_states() {
+        let mut q = play_quest();
+        assert_eq!(q.guidance(), "\u{25b6} Choose 1\u{2013}2 below");
+        at(&mut q, 4); // one choice only
+        assert_eq!(q.guidance(), "\u{25b6} Choose 1 below");
+        at(&mut q, 38); // an ending
+        assert_eq!(q.guidance(), "\u{25b6} The End \u{2014} n for a new game, b to go back");
+        q.game.as_mut().unwrap().sheet.endurance = 0;
+        assert!(q.guidance().starts_with("\u{25b6} Endurance 0 \u{2014} you died"), "{}", q.guidance());
+    }
+
+    #[test]
+    fn the_chart_reminder_shows_once_a_session() {
+        let mut q = play_quest();
+        assert!(q.show_reminder, "the first section of the session says who keeps the chart");
+        assert!(screen(&q, 120, 40).contains("you keep the chart yourself"));
+        at(&mut q, 4);
+        assert!(!q.show_reminder, "and only then");
+    }
+
+    #[test]
+    fn a_new_game_explains_the_house_rules_first() {
+        let (ctx, _rx) = crate::shell::test_ctx(toml::Table::new());
+        let mut q = play_quest();
+        q.on_key(KeyEvent::from(KeyCode::Char('n')), &ctx);
+        assert!(matches!(q.modal, Some(Modal::Intro)));
+        assert!(screen(&q, 120, 40).contains("HOW THIS WORKS"));
+        q.on_key(KeyEvent::from(KeyCode::Enter), &ctx);
+        // The custom book has no Kai Disciplines, so nothing follows it.
+        assert!(q.modal.is_none());
+    }
+
+    #[test]
+    fn removing_an_item_takes_two_presses_of_x() {
+        let (ctx, _rx) = crate::shell::test_ctx(toml::Table::new());
+        let mut q = play_quest();
+        q.sheet_sel = 4; // the first weapon slot
+        q.modal = Some(Modal::Prompt { label: "ITEM", text: "Crowbar".into() });
+        q.on_key(KeyEvent::from(KeyCode::Enter), &ctx);
+        assert_eq!(q.game.as_ref().unwrap().sheet.weapons[0], "Crowbar");
+
+        q.on_key(KeyEvent::from(KeyCode::Char('x')), &ctx);
+        assert_eq!(q.game.as_ref().unwrap().sheet.weapons[0], "Crowbar", "one x only arms it");
+        q.on_key(KeyEvent::from(KeyCode::Char('a')), &ctx); // any other key cancels
+        q.on_key(KeyEvent::from(KeyCode::Char('x')), &ctx);
+        assert_eq!(q.game.as_ref().unwrap().sheet.weapons[0], "Crowbar");
+        q.on_key(KeyEvent::from(KeyCode::Char('x')), &ctx);
+        assert_eq!(q.game.as_ref().unwrap().sheet.weapons[0], "", "x x removes it");
+    }
+
+    #[test]
+    fn the_chart_panel_names_its_sections_and_its_keys() {
+        let mut q = play_quest();
+        q.sheet_on = true;
+        let s = screen(&q, 120, 40);
+        for want in ["ACTION CHART", "STATS", "WEAPONS", "BACKPACK 0/8", "SPECIAL ITEMS", "KAI DISCIPLINES", "tab next", "esc close"] {
+            assert!(s.contains(want), "missing {want:?} in:\n{s}");
+        }
+        assert!(s.contains("\u{25b6}COMBAT SKILL"), "the selected field is marked:\n{s}");
+    }
+
+    #[test]
+    fn the_combat_panel_spells_out_the_fight() {
+        let mut q = play_quest();
+        at(&mut q, 7);
+        q.game.as_mut().unwrap().sheet.disciplines = vec!["Mindblast".into()];
+        let (ctx, _rx) = crate::shell::test_ctx(toml::Table::new());
+        q.open_combat(&ctx);
+        let s = screen(&q, 120, 40);
+        for want in ["COMBAT", "Rad Roach", "COMBAT RATIO", "+2 (Mindblast)", "enter fight a round", "e evade (allowed here)", "esc close"] {
+            assert!(s.contains(want), "missing {want:?} in:\n{s}");
+        }
+    }
+
+    #[test]
+    fn the_dice_modal_says_what_the_number_means() {
+        let mut q = play_quest();
+        at(&mut q, 8);
+        q.dice = Some(Dice { started: Instant::now() - DICE_SPIN, value: 7 });
+        let s = screen(&q, 120, 40);
+        assert!(s.contains("Random Number Table"), "{s}");
+        assert!(s.contains("you picked 7 \u{2192} turn to 11"), "{s}");
     }
 
     #[test]

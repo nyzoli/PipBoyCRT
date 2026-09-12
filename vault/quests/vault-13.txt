@@ -10,7 +10,7 @@ You pull on your jumpsuit. The corridor smells of ozone and yesterday's
 noodles.
 
 -> 2 Report to the Overseer first, as procedure demands
--> 3 Go straight to the Maintenance level and see the damage yourself
+-> 3 Go straight down and see the damage yourself
 
 [2]
 The Overseer's office is exactly as warm as his welcome. He explains, at
@@ -18,76 +18,364 @@ length, that the vault has survived two hundred years on procedure, and
 that procedure begins with the correct form. He stamps Form 13-B twice,
 then stamps the stamp.
 
-You leave with an authorisation slip and a faint headache.
+You leave with an Authorisation Slip and a faint headache. Write the
+Authorisation Slip on your Action Chart now; nobody will do it for you.
 
-Record the Authorisation Slip on your Action Chart.
-
--> 3 Take the lift down to Maintenance
--> 4 Detour past the storeroom while the slip is still warm
+-> 4 Stop at the storeroom while the slip is still warm
+-> 5 Take the lift straight down to Maintenance
 
 [3]
-Maintenance level is ankle deep and rising. A supervisor in waders points
-at a hatch marked DO NOT ENTER, then at you, then back at the hatch, in
-the universal gesture for promotion.
+You skip the office. Somewhere behind you a form goes unstamped, and the
+vault's paperwork shifts uneasily in its sleep.
 
-Beyond the hatch something skitters.
+The lift smells of wet carpet, which is impressive, as there is no carpet.
 
--> 5 Open the hatch
--> 4 Visit the storeroom for a proper tool first
+-> 5 Step out on the Maintenance level
+-> 6 Stop one floor early at the tool cupboard
 
 [4]
 The storeroom clerk has been asleep since the Great Inventory. He wakes
-long enough to slide a crate across the counter and go back to sleep.
+just long enough to slide a crate over the counter and go back under.
 Inside: one Pipe Wrench, one tin of Iguana-on-a-Stick, and a laminated
 card reading TOOL RETURN IS MANDATORY.
 
-Record the Pipe Wrench and one Meal on your Action Chart.
+Add the Pipe Wrench to your Weapons and one Meal to your chart.
 
--> 5 Head for the hatch
+-> 5 Down to Maintenance
 
 [5]
+Maintenance is ankle deep and rising. A supervisor in waders points at a
+hatch marked DO NOT ENTER, then at you, then back at the hatch, in the
+universal gesture for promotion.
+
+Beyond the hatch something skitters.
+
+-> 7 Open the hatch and crawl in
+-> 6 Find a proper tool first
+
+[6]
+The tool cupboard contains a crowbar, a bucket of bolts labelled BOLTS
+(ASSORTED, MOSTLY), and a poster of a smiling family under the slogan
+VAULT-TEC: YOUR TOMORROW IS OUR YESTERDAY.
+
+Add the Crowbar to your Weapons if you want it. It is, at minimum, a
+very honest piece of metal.
+
+-> 5 Back to the flooded corridor
+-> 7 Straight on to the hatch
+
+[7]
 The hatch opens onto the coolant crawlspace. Your lamp finds two eyes,
 then the rest of the rad roach attached to them. It is the size of a
-footstool and twice as confident.
+footstool and roughly twice as confident.
 
 !combat Rad Roach 9 12
 
-If you would rather not test the wrench, you may evade into the crawlspace
-and keep going.
+The crawlspace runs on past it, so you may evade instead of fighting to
+the end.
 
--> 6 If you win the fight, or evade, crawl on
--> 8 If you retreat to the corridor instead
-
-[6]
-Past the crawlspace is the spare parts locker, sealed since 2161. The
-keypad wants four digits. Above it someone has helpfully scratched
-"THE YEAR WE ALL AGREED NOT TO TALK ABOUT".
-
-Pick a number from the Random Number Table.
-
--> 7 If you pick 0-4, the panel accepts it
--> 8 If you pick 5-9, the panel does not
-
-[7]
-The locker holds a water chip in its original packaging, complete with a
-cheerful sticker: VAULT-TEC — TOMORROW, TODAY, PROBABLY.
-
-Record the Water Chip as a Special Item.
-
--> 9 Carry it back up to Maintenance
+-> 8 Crawl on to the spare parts locker
+-> 9 Back out to the corridor
 
 [8]
-You climb back to the corridor with nothing but wet boots. The supervisor
-looks at you the way supervisors do. There is, he admits, a second locker.
-There is always a second locker.
+The spare parts locker has been sealed since 2161. The keypad wants four
+digits. Above it someone has scratched THE YEAR WE ALL AGREED NOT TO
+TALK ABOUT, which is helpful if you were there and useless if you were
+not.
 
--> 6 Try the keypad again
+Pick a number from the Random Number Table. If it is 0–4, turn to 10;
+if it is 5–9, turn to 11.
+
+-> 10 If it is 0–4, turn to 10
+-> 11 If it is 5–9, turn to 11
 
 [9]
-The recycler swallows the chip and hums a note it has not managed in
-decades. The water level drops. Somewhere above you, the Overseer is
-already drafting a memo about the correct procedure for gratitude.
+You reverse out with nothing but wet boots. The supervisor looks at you
+the way supervisors do, then admits there is a second locker. There is
+always a second locker.
 
-Vault 13 is dry. You have earned your noodles.
+-> 8 Try the keypad again
+-> 12 Go up and report the difficulty through channels
+
+[10]
+The door sighs open. Inside, in its original packaging, sits a water
+chip, complete with a cheerful sticker: VAULT-TEC - TOMORROW, TODAY,
+PROBABLY.
+
+Record the Water Chip under Special Items. The Pip-Boy will not do it
+for you, and the recycler will ask.
+
+-> 13 Carry it back up
+
+[11]
+The keypad buzzes, thinks about it, and buzzes again. Somewhere three
+levels up, a light comes on in a room nobody has entered since the
+lights were installed.
+
+-> 8 Try once more
+-> 12 Leave it and go through channels
+
+[12]
+Back in the office, the Overseer listens with the expression of a man
+who has read every form ever printed and enjoyed most of them. The
+problem, he says, is that you are on Form 13-B, and a failed locker
+requires Form 13-C.
+
+He stamps something. It is not clear what.
+
+-> 14 Take 13-C to the requisition desk
+-> 9 Go back down and have another go at the locker
+
+[13]
+You climb with the chip under one arm. The lift is dark, the call button
+is warm, and a small handwritten sign reads OUT OF ORDER - USE THE
+OTHER ONE. There is no other one.
+
+-> 15 Take the stairwell
+-> 16 Take the service shaft
+
+[14]
+The requisition desk is staffed by a clerk who has perfected the art of
+looking busy at a desk with nothing on it. He asks for your
+authorisation.
+
+If you have the Authorisation Slip on your Action Chart, turn to 17. If
+you do not, turn to 18.
+
+-> 17 If you have the Authorisation Slip
+-> 18 If you do not have it
+
+[15]
+The stairwell is loud with dripping. Halfway down, something large and
+unimpressed by your jumpsuit comes up the other way.
+
+!combat Mole Rat 11 16
+
+-> 19 Push past and carry on up
+-> 20 Give ground and go down instead
+
+[16]
+The service shaft is a ladder in a pipe, which is a fine thing to be
+until you are on it. The rungs are slick.
+
+Pick a number from the Random Number Table. If it is 0-4, turn to 21;
+if it is 5-9, turn to 19.
+
+-> 21 If it is 0-4, turn to 21
+-> 19 If it is 5-9, turn to 19
+
+[17]
+The clerk reads the slip twice, holds it to the light, and stamps it
+with obvious pleasure. In return you receive a Spare Chip Voucher, which
+he explains is worth exactly one spare chip and nothing else in this or
+any other world.
+
+Record the Spare Chip Voucher under Special Items.
+
+-> 22 Take it to the storeroom
+
+[18]
+Without the slip you are, in the clerk's professional opinion, a person
+with an interesting story and no paperwork. He is sympathetic. He is
+also immovable.
+
+-> 2 Go and get the slip stamped properly
+-> 23 Try the corridor of vending machines instead
+
+[19]
+Level 2 smells almost dry. The corridor splits: hydroponics one way,
+the reactor the other, and a maintenance arrow pointing firmly at the
+floor.
+
+-> 24 Go through hydroponics
+-> 25 Take the reactor corridor
+
+[20]
+Down is darker and wetter. The sub-basement has decided to become a
+water feature and is making a good job of it.
+
+-> 26 Wade to the pump room
+-> 15 Climb back up the stairwell
+
+[21]
+Your boot finds the one rung that has been waiting two hundred years
+for a boot. You arrive in the sub-basement faster than planned and
+considerably wetter.
+
+Lose 2 ENDURANCE if you are keeping score honestly, and you should be.
+
+-> 26 Pick yourself up and head for the pump room
+
+[22]
+The storeroom clerk surfaces, inspects the voucher, and produces a chip
+from a shelf that was empty the last time anyone looked at it. He does
+not explain. Storeroom clerks never do.
+
+Record the Water Chip under Special Items.
+
+-> 13 Carry it up
+
+[23]
+The vending corridor hums with six machines, five of them dark. The
+survivor is a Nuka machine with a hand-lettered sign: EXACT CAP ONLY -
+NO REFUNDS - NO DISCUSSION.
+
+-> 28 Put a cap in
+-> 24 Walk on to hydroponics
+
+[24]
+Hydroponics is warm, green, and smells like the idea of outdoors. Old
+Hilda is up to her elbows in a tuber tray and does not look up.
+
+"You're the chip one," she says. "Everyone's the chip one this week."
+
+-> 29 Ask her about the recycler
+-> 25 Leave her to the tubers
+
+[25]
+The reactor corridor is lit the colour of a headache. The nest under the
+conduit is not a nest so much as a committee, and it has noticed you.
+
+!combat Rad Roach Swarm 13 20
+
+-> 30 Clear the corridor and go on
+-> 26 Retreat to the sub-basement
+
+[26]
+The pump room is knee deep and patient. Somewhere below the surface a
+pump is doing its best, which is not much, and doing it loudly.
+
+-> 31 Work the valve wheel
+-> 20 Back to the stairwell
+
+[27]
+The storeroom, again. The clerk, again. He slides a second crate over
+the counter without opening his eyes. Inside is a chip, a spanner, and
+a note that says I KNEW YOU'D BE BACK.
+
+-> 13 Take it up
+-> 32 Stop by the Overseer's lounge on the way
+
+[28]
+The machine takes your cap with a sound of enormous satisfaction.
+
+Pick a number from the Random Number Table. If it is 0, 1 or 2, turn to
+33; if it is 3 to 9, turn to 29.
+
+-> 33 If it is 0, 1 or 2, turn to 33
+-> 29 If it is 3 to 9, turn to 29
+
+[29]
+Hilda wipes her hands and tells you what everyone above Level 2 has
+forgotten: the recycler does not want a new chip so much as an honest
+one. The last three were requisitioned, approved, stamped, and wrong.
+
+She gives you a Tuber. Add it to your Backpack. It is not much of a
+weapon, but it is a very good tuber.
+
+-> 24 Back to the corridor
+-> 34 Go down to the recycler chamber
+
+[30]
+The corridor is quiet in the way corridors are when the committee has
+adjourned. Behind the conduit, a service hatch leads down towards the
+recycler.
+
+-> 34 Take the hatch down
+-> 31 Detour through the pump room
+
+[31]
+The valve wheel turns with a groan you feel in your teeth. The water
+drops four inches and stops, as if to see whether you are impressed.
+
+-> 34 On to the recycler chamber
+-> 26 Stay and wrestle the pump a while longer
+
+[32]
+The Overseer's lounge is dim and smells of pipe smoke that predates the
+pipe. He is running a slideshow titled PROCEDURE: A CELEBRATION, and he
+is on slide eleven of two hundred.
+
+-> 35 Sit down for one slide. Just one.
+-> 12 Make your excuses and go back to the office
+
+[33]
+The machine returns your cap, then returns it again, then keeps
+returning it. The panel slides open and a vending unit unfolds itself to
+its full and frankly unnecessary height.
+
+!combat Vend-Tron 8 10
+
+-> 29 Step over the parts and go to hydroponics
+-> 23 Back into the corridor and pretend that did not happen
+
+[34]
+The recycler chamber is all pipes and apology. The intake tray sits open
+at chest height, exactly the size of a water chip, waiting with the
+patience of a machine that has been let down before.
+
+If you have the Water Chip on your Action Chart, turn to 36. If you do
+not, turn to 37.
+
+-> 36 If you have the Water Chip
+-> 37 If you do not have it
+
+[35]
+Slide eleven becomes slide twelve. Somewhere around slide forty the
+Overseer says, without turning round, that a person who sits through
+this is a person who understands paperwork, and that the vault will
+need a Deputy Overseer of Requisitions.
+
+-> 40 Accept the position
+-> 34 Excuse yourself and take the chip down
+
+[36]
+The tray accepts the chip with a click that sounds, if you are honest,
+slightly surprised.
+
+Pick a number from the Random Number Table. If it is 0–5, turn to 38;
+if it is 6–9, turn to 39.
+
+-> 38 If it is 0–5, turn to 38
+-> 39 If it is 6–9, turn to 39
+
+[37]
+The tray is open, the chamber is waiting, and your hands are empty. The
+recycler makes a noise that in a person would be a sigh.
+
+-> 8 Go back to the spare parts locker
+-> 39 Go up and tell them it cannot be done
+
+[38]
+The recycler swallows the chip and hums a note it has not managed in
+decades. The water level drops. A pump somewhere finds its rhythm and
+keeps it.
+
+Vault 13 is dry. Somewhere above you the Overseer is already drafting a
+memo about the correct procedure for gratitude, and the storeroom clerk
+is asleep, and hydroponics smells like the idea of outdoors, and you
+have earned your noodles.
+
+THE END
+
+[39]
+The chamber floods with a politeness that makes it worse. By the time
+the bulkheads close, the water is over the intake tray, over the
+walkway, and rising with the calm of something that has read the
+schedule and is running early.
+
+The report will say the requisition was correctly filed. That is the
+part they always get right.
+
+THE END
+
+[40]
+You accept. There is a badge. There is a desk. There is, within a week,
+a Form 13-D of your own devising, and by the end of the year nobody
+below Level 3 may open a cupboard without it.
+
+The water is never fixed. But the paperwork describing the water is the
+finest in the vault system, and twice a year a clerk from Vault 8 comes
+to admire it.
 
 THE END
