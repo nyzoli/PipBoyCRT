@@ -244,21 +244,20 @@ pub mod icmp {
 }
 use icmp::Pinger;
 
-/// Longest a single reverse lookup may take before it is given up on.
-const RDNS_TIMEOUT: Duration = Duration::from_secs(1);
-
-/// Reverse DNS for one address (v4 or v6), with a hard ceiling: `getnameinfo`
-/// has no timeout of its own, so it runs on a throwaway thread we simply stop
-/// waiting for. `None` = no PTR record, or it took too long.
+/// Reverse DNS for one address (v4 or v6). Blocking: `getnameinfo` has no
+/// timeout of its own, so this call may take up to the OS resolver's own
+/// timeout. A per-call detached thread used to enforce a 1 s ceiling here,
+/// but `getnameinfo` doesn't stop when its caller stops waiting — it kept
+/// running (and blocking) past the deadline, one leaked thread per lookup.
+/// Callers that need a ceiling now run this on their own resolver thread
+/// (a standing one, not spawned per call) and simply move on without it,
+/// same as the leaked thread would have — but without spawning a new one
+/// every cycle. `None` = no PTR record.
 ///
 /// Privacy: this asks whatever resolver Windows is configured to use, so the
 /// address being looked up leaves the machine. Nothing else does.
 pub fn reverse_dns(ip: std::net::IpAddr) -> Option<String> {
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let _ = tx.send(rdns::host_name(ip));
-    });
-    rx.recv_timeout(RDNS_TIMEOUT).ok().flatten()
+    rdns::host_name(ip)
 }
 
 mod rdns {

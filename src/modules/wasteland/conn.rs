@@ -26,10 +26,11 @@ use ratatui::Frame;
 use serde::Deserialize;
 use std::cell::Cell;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{Duration, Instant};
 
 /// Config section key of this view; it keeps COMMS's own `[comms]` table.
@@ -42,9 +43,12 @@ const MIN_INTERVAL: u64 = 1;
 const NAME_TTL: Duration = Duration::from_secs(60);
 /// How long a resolved (or unresolved) reverse-DNS answer is trusted.
 const DNS_TTL: Duration = Duration::from_secs(3600);
-/// Reverse-DNS lookups started per cycle, and the threads sharing them.
-const MAX_LOOKUPS: usize = 32;
-const DNS_PARALLEL: usize = 8;
+/// Standing threads resolving names off the scan thread.
+const DNS_POOL: usize = 4;
+/// Longest the resolver's work queue is allowed to back up; past this an
+/// enqueue is just dropped for the cycle (tried again once the address is
+/// still cold next time).
+const DNS_QUEUE: usize = 64;
 /// Plausibility cap on the row count a table reports.
 const MAX_ROWS: usize = 8192;
 /// Longest accepted host name; a reverse-DNS answer is untrusted text.
@@ -300,8 +304,8 @@ fn rate_cell(r: Option<u64>) -> String {
     match r {
         None => "\u{2014}".to_string(),
         Some(0) => "\u{b7}".to_string(),
-        Some(v) if v >= 1_000_000 => format!("{:.1}M", v as f64 / 1_048_576.0),
-        Some(v) if v >= 1000 => format!("{}k", v / 1024),
+        Some(v) if v >= 1_048_576 => format!("{:.1}M", v as f64 / 1_048_576.0),
+        Some(v) if v >= 1024 => format!("{}k", v / 1024),
         Some(v) => v.to_string(),
     }
 }
@@ -467,6 +471,74 @@ impl NameCache {
     }
 }
 
+// ---- reverse DNS, off the scan thread -----------------------------------------
+
+type DnsCache = Arc<Mutex<HashMap<IpAddr, (Option<String>, Instant)>>>;
+
+/// Resolves remote addresses to names on [`DNS_POOL`] standing threads, so
+/// the 3 s scan thread never waits on `getnameinfo`: it only reads whatever
+/// is already in `cache` and drops a miss on `tx` for a resolver thread to
+/// pick up later. A miss already queued (tracked in `inflight`) is not
+/// queued twice, and a full queue just drops the enqueue for this cycle —
+/// the address is still cold next cycle, so it is offered again.
+struct DnsResolver {
+    cache: DnsCache,
+    inflight: Arc<Mutex<HashSet<IpAddr>>>,
+    tx: SyncSender<IpAddr>,
+}
+
+impl DnsResolver {
+    fn new() -> Self {
+        let cache: DnsCache = Arc::new(Mutex::new(HashMap::new()));
+        let inflight: Arc<Mutex<HashSet<IpAddr>>> = Arc::new(Mutex::new(HashSet::new()));
+        let (tx, rx) = mpsc::sync_channel::<IpAddr>(DNS_QUEUE);
+        let rx = Arc::new(Mutex::new(rx));
+        for _ in 0..DNS_POOL {
+            let rx = Arc::clone(&rx);
+            let cache = Arc::clone(&cache);
+            let inflight = Arc::clone(&inflight);
+            thread::spawn(move || loop {
+                // The blocking call: may take up to the OS resolver's own
+                // timeout, but only this thread waits on it.
+                let Ok(ip) = rx.lock().unwrap().recv() else { return };
+                let name = reverse_dns(ip).map(|n| sanitize_name(&n)).filter(|n| !n.is_empty());
+                cache.lock().unwrap().insert(ip, (name, Instant::now()));
+                inflight.lock().unwrap().remove(&ip);
+            });
+        }
+        Self { cache, inflight, tx }
+    }
+
+    /// Cached names for `ips` (whatever is fresh), and enqueues the misses.
+    /// Never blocks.
+    fn lookup(&self, ips: impl Iterator<Item = IpAddr>) -> HashMap<IpAddr, Option<String>> {
+        let now = Instant::now();
+        let mut cache = self.cache.lock().unwrap();
+        cache.retain(|_, (_, at)| now.duration_since(*at) < DNS_TTL);
+        let mut out = HashMap::new();
+        let mut misses = Vec::new();
+        for ip in ips {
+            match cache.get(&ip) {
+                Some((name, _)) => {
+                    out.insert(ip, name.clone());
+                }
+                None => misses.push(ip),
+            }
+        }
+        drop(cache);
+        if misses.is_empty() {
+            return out;
+        }
+        let mut inflight = self.inflight.lock().unwrap();
+        for ip in misses {
+            if inflight.insert(ip) && self.tx.try_send(ip).is_err() {
+                inflight.remove(&ip);
+            }
+        }
+        out
+    }
+}
+
 // ---- the background worker ---------------------------------------------------
 
 struct Prev {
@@ -481,7 +553,7 @@ struct Worker {
     interval: Duration,
     sys: sysinfo::System,
     names: NameCache,
-    dns: HashMap<IpAddr, (Option<String>, Instant)>,
+    dns: DnsResolver,
     prev: HashMap<Key, Prev>,
     estats: Estats,
     last_at: Option<Instant>,
@@ -494,7 +566,7 @@ impl Worker {
             interval,
             sys: sysinfo::System::new(),
             names: NameCache::default(),
-            dns: HashMap::new(),
+            dns: DnsResolver::new(),
             prev: HashMap::new(),
             estats: Estats::Unknown,
             last_at: None,
@@ -574,49 +646,26 @@ impl Worker {
         }
     }
 
-    /// Reverse DNS for the remotes not in the cache, bounded per cycle.
-    fn fill_names_dns(&mut self, conns: &mut [Conn], now: Instant) {
-        self.dns.retain(|_, (_, at)| now.duration_since(*at) < DNS_TTL);
-        let mut cold: Vec<IpAddr> = conns
-            .iter()
-            .map(|c| c.remote.ip())
-            .filter(|ip| !self.dns.contains_key(ip) && !is_loopback(*ip))
-            .collect::<std::collections::HashSet<IpAddr>>()
-            .into_iter()
-            .collect();
-        cold.sort();
-        cold.truncate(MAX_LOOKUPS);
-        if !cold.is_empty() {
-            let next = AtomicUsize::new(0);
-            let (tx, rx) = mpsc::channel();
-            std::thread::scope(|s| {
-                for _ in 0..DNS_PARALLEL.min(cold.len()) {
-                    let (next, cold, tx) = (&next, &cold, tx.clone());
-                    s.spawn(move || loop {
-                        let Some(&ip) = cold.get(next.fetch_add(1, AtomicOrdering::Relaxed)) else { return };
-                        let name = reverse_dns(ip).map(|n| sanitize_name(&n)).filter(|n| !n.is_empty());
-                        if tx.send((ip, name)).is_err() {
-                            return;
-                        }
-                    });
-                }
-            });
-            drop(tx);
-            for (ip, name) in rx.try_iter() {
-                self.dns.insert(ip, (name, now));
-            }
-        }
+    /// Reverse DNS for the remotes: reads whatever the resolver pool already
+    /// has cached and hands it the misses — never waits on a lookup itself.
+    fn fill_names_dns(&mut self, conns: &mut [Conn]) {
+        let ips = conns.iter().map(|c| c.remote.ip()).filter(|ip| !is_loopback(*ip));
+        let names = self.dns.lookup(ips);
         for c in conns.iter_mut() {
-            c.name = self.dns.get(&c.remote.ip()).and_then(|(n, _)| n.clone());
+            c.name = names.get(&c.remote.ip()).cloned().flatten();
         }
     }
 
     fn scan(&mut self) -> Snap {
+        // `dt` is the gap between two table reads, not between two `scan()`
+        // calls: nothing before this point may block (name resolution no
+        // longer does), but measuring right at the read keeps it exact even
+        // if that ever changes again.
+        let (tcp, raw) = ffi::tcp_rows();
         let now = Instant::now();
         let dt = self.last_at.map(|t| now.duration_since(t)).unwrap_or(self.interval);
         self.last_at = Some(now);
 
-        let (tcp, raw) = ffi::tcp_rows();
         let mut listening = ffi::udp_bound();
         let mut conns = Vec::new();
         for r in tcp {
@@ -662,7 +711,7 @@ impl Worker {
         }
         self.fill_names(&mut conns, now);
         self.fill_traffic(&mut conns, &raw, dt);
-        self.fill_names_dns(&mut conns, now);
+        self.fill_names_dns(&mut conns);
 
         // Forget the connections that are gone; remember this cycle's counters.
         let live: std::collections::HashSet<Key> = conns.iter().map(Conn::key).collect();
@@ -722,7 +771,13 @@ pub struct ConnView {
     listening: usize,
     estats: Estats,
     loading: bool,
-    sel: usize,
+    /// The selected connection, tracked by key since `rows()` regroups and
+    /// re-sorts every cycle — a bare row index would drift under the
+    /// selected row when a group above it changes size.
+    sel: Option<Key>,
+    /// Row index to fall back to when `sel`'s connection is gone, and the
+    /// position new arrow-key movement starts from.
+    sel_idx: usize,
     mode: Mode,
     sort: Sort,
     show_loopback: bool,
@@ -745,7 +800,8 @@ impl ConnView {
             listening: 0,
             estats: Estats::Unknown,
             loading: false,
-            sel: 0,
+            sel: None,
+            sel_idx: 0,
             mode: Mode::List,
             sort: Sort::Process,
             filter: String::new(),
@@ -791,13 +847,36 @@ impl ConnView {
         }
     }
 
+    /// The row index `sel` currently points at: the row of its connection,
+    /// re-found in this cycle's (regrouped, re-sorted) `rows`, or the nearest
+    /// remembered index when that connection is gone.
+    fn resolve_sel_idx(&self, conns: &[&Conn], rows: &[Row]) -> usize {
+        if rows.is_empty() {
+            return 0;
+        }
+        if let Some(key) = self.sel {
+            if let Some(idx) = rows.iter().position(|r| matches!(r, Row::Conn(i) if conns[*i].key() == key)) {
+                return idx;
+            }
+        }
+        self.sel_idx.min(rows.len() - 1)
+    }
+
     fn move_sel(&mut self, delta: i32) {
-        let len = self.rows().1.len();
-        if len == 0 {
-            self.sel = 0;
+        let (conns, rows) = self.rows();
+        if rows.is_empty() {
+            self.sel = None;
+            self.sel_idx = 0;
             return;
         }
-        self.sel = (self.sel as i32 + delta).clamp(0, len as i32 - 1) as usize;
+        let cur = self.resolve_sel_idx(&conns, &rows) as i32;
+        let new = (cur + delta).clamp(0, rows.len() as i32 - 1) as usize;
+        let key = match rows.get(new) {
+            Some(Row::Conn(i)) => conns.get(*i).map(|c| c.key()),
+            _ => None,
+        };
+        self.sel_idx = new;
+        self.sel = key;
     }
 
     fn title_line(&self, width: u16, t: Theme) -> Line<'static> {
@@ -945,7 +1024,7 @@ impl ConnView {
                 })
                 .collect();
             let mut state = ListState::default();
-            state.select(Some(self.sel.min(rows.len() - 1)));
+            state.select(Some(self.resolve_sel_idx(&conns, &rows).min(rows.len() - 1)));
             f.render_stateful_widget(List::new(items).highlight_style(t.tab_active), parts[2], &mut state);
         }
         if let (Mode::Filter(input), true) = (&self.mode, parts[3].height > 0) {
@@ -1068,8 +1147,10 @@ impl ConnView {
                             self.mode = Mode::List;
                         }
                     }
-                    let len = self.rows().1.len();
-                    self.sel = self.sel.min(len.saturating_sub(1));
+                    // `sel` re-finds its connection by key next draw/move; keep
+                    // the fallback index roughly in place for when it can't.
+                    let (conns, rows) = self.rows();
+                    self.sel_idx = self.resolve_sel_idx(&conns, &rows);
                 }
                 CommsEvent::Note(msg) => {
                     let _ = ctx.notify.send(Notice::Footer(msg));
@@ -1097,7 +1178,8 @@ impl ConnView {
                 }
                 None => self.filter = input.clone(),
             }
-            self.sel = 0;
+            self.sel = None;
+            self.sel_idx = 0;
             return true;
         }
         match key.code {
@@ -1107,7 +1189,8 @@ impl ConnView {
             KeyCode::PageDown => self.move_sel(self.body_height.get().max(1) as i32),
             KeyCode::Enter => {
                 let (conns, rows) = self.rows();
-                if let Some(Row::Conn(i)) = rows.get(self.sel) {
+                let idx = self.resolve_sel_idx(&conns, &rows);
+                if let Some(Row::Conn(i)) = rows.get(idx) {
                     if let Some(c) = conns.get(*i) {
                         self.mode = Mode::Detail(c.key());
                     }
@@ -1118,14 +1201,16 @@ impl ConnView {
                     self.mode = Mode::List;
                 } else if !self.filter.is_empty() {
                     self.filter.clear();
-                    self.sel = 0;
+                    self.sel = None;
+                    self.sel_idx = 0;
                 } else {
                     return false;
                 }
             }
             KeyCode::Char('s') => {
                 self.sort = self.sort.next();
-                self.sel = 0;
+                self.sel = None;
+                self.sel_idx = 0;
                 let _ = ctx.notify.send(Notice::Footer(format!("comms: sorted by {}", self.sort.label())));
             }
             KeyCode::Char('f') => self.mode = Mode::Filter(self.filter.clone()),
@@ -1191,8 +1276,9 @@ mod ffi {
     use windows_sys::Win32::NetworkManagement::IpHelper::{
         GetExtendedTcpTable, GetExtendedUdpTable, GetPerTcpConnectionEStats, SetPerTcpConnectionEStats,
         TcpConnectionEstatsData, MIB_TCP6ROW_OWNER_PID, MIB_TCP6TABLE_OWNER_PID, MIB_TCPROW_LH,
-        MIB_TCPROW_LH_0, MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID, MIB_UDPTABLE_OWNER_PID,
-        TCP_ESTATS_DATA_ROD_v0, TCP_ESTATS_DATA_RW_v0, TCP_TABLE_OWNER_PID_ALL, UDP_TABLE_OWNER_PID,
+        MIB_TCPROW_LH_0, MIB_TCPROW_OWNER_PID, MIB_TCPTABLE_OWNER_PID, MIB_UDPROW_OWNER_PID,
+        MIB_UDPTABLE_OWNER_PID, TCP_ESTATS_DATA_ROD_v0, TCP_ESTATS_DATA_RW_v0, TCP_TABLE_OWNER_PID_ALL,
+        UDP_TABLE_OWNER_PID,
     };
     use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
 
@@ -1247,6 +1333,14 @@ mod ffi {
         None
     }
 
+    /// `dwNumEntries` is read from the same buffer Windows just wrote into —
+    /// trust it for row bounds too, but never past what the buffer we
+    /// actually allocated could physically hold.
+    fn row_cap<T>(reported: u32, buf: &[u64]) -> usize {
+        let by_buf = (buf.len() * 8).saturating_sub(4) / std::mem::size_of::<T>();
+        (reported as usize).min(MAX_ROWS).min(by_buf)
+    }
+
     /// Every TCP connection of both families, plus the IPv4 rows ESTATS can
     /// be asked about.
     pub fn tcp_rows() -> (Vec<TcpRow>, HashMap<Key, Row4>) {
@@ -1255,7 +1349,7 @@ mod ffi {
         if let Some(buf) = table(AF_INET, false) {
             unsafe {
                 let t = buf.as_ptr().cast::<MIB_TCPTABLE_OWNER_PID>();
-                let n = ((*t).dwNumEntries as usize).min(MAX_ROWS);
+                let n = row_cap::<MIB_TCPROW_OWNER_PID>((*t).dwNumEntries, &buf);
                 for r in std::slice::from_raw_parts((*t).table.as_ptr(), n) {
                     let r: &MIB_TCPROW_OWNER_PID = r;
                     let local = SocketAddr::new(
@@ -1283,7 +1377,7 @@ mod ffi {
         if let Some(buf) = table(AF_INET6, false) {
             unsafe {
                 let t = buf.as_ptr().cast::<MIB_TCP6TABLE_OWNER_PID>();
-                let n = ((*t).dwNumEntries as usize).min(MAX_ROWS);
+                let n = row_cap::<MIB_TCP6ROW_OWNER_PID>((*t).dwNumEntries, &buf);
                 for r in std::slice::from_raw_parts((*t).table.as_ptr(), n) {
                     let r: &MIB_TCP6ROW_OWNER_PID = r;
                     let local = SocketAddr::new(
@@ -1309,7 +1403,7 @@ mod ffi {
             if let Some(buf) = table(af, true) {
                 unsafe {
                     let t = buf.as_ptr().cast::<MIB_UDPTABLE_OWNER_PID>();
-                    n += ((*t).dwNumEntries as usize).min(MAX_ROWS);
+                    n += row_cap::<MIB_UDPROW_OWNER_PID>((*t).dwNumEntries, &buf);
                 }
             }
         }
@@ -1563,6 +1657,8 @@ mod tests {
         assert_eq!(rate_cell(None), "—");
         assert_eq!(rate_cell(Some(0)), "·");
         assert_eq!(rate_cell(Some(512)), "512");
+        assert_eq!(rate_cell(Some(1000)), "1000", "below the 1024 threshold, not a misleading \"0k\"");
+        assert_eq!(rate_cell(Some(1024)), "1k");
         assert_eq!(rate_cell(Some(20_480)), "20k");
         assert!(rate_cell(Some(2_097_152)).starts_with("2.0M"));
         assert_eq!(rate_line(None), "—");
@@ -1584,6 +1680,25 @@ mod tests {
         assert_eq!(c.get(9999, t0), None);
         c.sweep(t0 + NAME_TTL);
         assert_eq!(c.get(1234, t0), None, "the stale entry is gone for good");
+    }
+
+    #[test]
+    fn dns_resolver_never_blocks_and_serves_the_cache() {
+        let r = DnsResolver::new();
+        let ip: IpAddr = "203.0.113.5".parse().unwrap();
+
+        // Nothing cached yet: the lookup only enqueues the miss and returns
+        // immediately — it never waits on `getnameinfo` itself.
+        let start = Instant::now();
+        let out = r.lookup(std::iter::once(ip));
+        assert!(start.elapsed() < Duration::from_millis(200), "lookup must never block on DNS");
+        assert!(out.get(&ip).is_none(), "not cached yet");
+
+        // Once a resolver thread has written a result (simulated here rather
+        // than waiting on a real lookup), a later lookup serves it from cache.
+        r.cache.lock().unwrap().insert(ip, (Some("host.example.net".into()), Instant::now()));
+        let out = r.lookup(std::iter::once(ip));
+        assert_eq!(out.get(&ip).cloned().flatten(), Some("host.example.net".to_string()));
     }
 
     #[test]
@@ -1686,15 +1801,20 @@ mod tests {
         let (ctx, _notices) = crate::shell::test_ctx(toml::Table::new());
         let mut m = loaded();
         let key = |c: KeyCode| KeyEvent::new(c, KeyModifiers::NONE);
+        let idx = |m: &ConnView| {
+            let (conns, rows) = m.rows();
+            m.resolve_sel_idx(&conns, &rows)
+        };
         assert!(m.on_key(key(KeyCode::Down), &ctx));
-        assert_eq!(m.sel, 1);
+        assert_eq!(idx(&m), 1);
         assert!(m.on_key(key(KeyCode::Up), &ctx));
         assert!(m.on_key(key(KeyCode::Up), &ctx));
-        assert_eq!(m.sel, 0, "clamped at the top");
+        assert_eq!(idx(&m), 0, "clamped at the top");
         // Row 0 is a process header: Enter does nothing there.
         assert!(m.on_key(key(KeyCode::Enter), &ctx));
         assert_eq!(m.mode, Mode::List);
-        m.sel = 1;
+        m.on_key(key(KeyCode::Down), &ctx);
+        assert_eq!(idx(&m), 1);
         assert!(m.on_key(key(KeyCode::Enter), &ctx));
         assert!(matches!(m.mode, Mode::Detail(_)));
         assert!(m.on_key(key(KeyCode::Esc), &ctx));
@@ -1728,6 +1848,29 @@ mod tests {
         assert!(m.on_key(key(KeyCode::Char('l')), &ctx));
         assert!(m.show_loopback);
         assert!(!m.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL), &ctx), "ctrl+c quits");
+    }
+
+    #[test]
+    fn selection_survives_a_regroup_above_it() {
+        let (ctx, _notices) = crate::shell::test_ctx(toml::Table::new());
+        let mut m = loaded(); // rows: backup/1, chrome/2 (·78, ·99), ssh/1
+        let down = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        for _ in 0..4 {
+            m.on_key(down, &ctx);
+        }
+        let (conns, rows) = m.rows();
+        let before = m.resolve_sel_idx(&conns, &rows);
+        assert_eq!(before, 4, "landed on chrome's second connection");
+        let Row::Conn(i) = rows[before] else { panic!("expected a connection row") };
+        assert_eq!(conns[i].remote.ip().to_string(), "142.250.185.99");
+
+        // A new process group sorts in above "chrome", pushing its rows down.
+        m.conns.insert(0, conn("apple", "198.51.100.1", 80, "ESTABLISHED", None));
+        let (conns, rows) = m.rows();
+        let after = m.resolve_sel_idx(&conns, &rows);
+        assert_ne!(after, before, "the row moved because a group was inserted above it");
+        let Row::Conn(i) = rows[after] else { panic!("expected a connection row") };
+        assert_eq!(conns[i].remote.ip().to_string(), "142.250.185.99", "same connection stays selected");
     }
 
     #[test]

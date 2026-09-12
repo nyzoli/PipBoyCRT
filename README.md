@@ -293,9 +293,9 @@ The tab has two views and `v` switches between them: **LOCAL NET**, the
 devices around you, and **CONN**, the connections this machine has open. They
 are two halves of the same question — who is on the network, and who is your
 machine actually talking to — and each keeps its own thread, its own cadence
-and its own config section (`[wasteland]`, `[comms]`). The title line always
-names the other one (`· v: CONN`), and `v` is a plain letter again while a
-`NAME>` or `FILTER>` prompt is open.
+and its own config section (`[wasteland]`, `[comms]`). The title line names
+the other one (`· v: CONN`) when the title has room for it, and `v` is a
+plain letter again while a `NAME>` or `FILTER>` prompt is open.
 
 ### LOCAL NET view
 

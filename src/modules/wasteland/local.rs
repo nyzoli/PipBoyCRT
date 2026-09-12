@@ -674,7 +674,7 @@ fn run_ipconfig() -> Option<String> {
 fn reverse_dns(ip: Ipv4Addr) -> Option<String> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _ = tx.send(ffi::host_name(ip));
+        let _ = tx.send(crate::net::reverse_dns(std::net::IpAddr::V4(ip)));
     });
     rx.recv_timeout(DNS_TIMEOUT).ok().flatten().map(|n| sanitize_name(&n)).filter(|n| !n.is_empty())
 }
@@ -1534,10 +1534,7 @@ mod ffi {
     use std::net::Ipv4Addr;
     use std::ptr::null_mut;
     use windows_sys::Win32::NetworkManagement::IpHelper::{FreeMibTable, GetIpNetTable2, MIB_IPNET_TABLE2};
-    use windows_sys::Win32::Networking::WinSock::{
-        getnameinfo, NlnsPermanent, NlnsReachable, NlnsStale, WSAStartup, AF_INET, NI_NAMEREQD, SOCKADDR,
-        SOCKADDR_IN, WSADATA,
-    };
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, NlnsPermanent, NlnsReachable, NlnsStale};
 
     /// `ERROR_SUCCESS`.
     const OK: u32 = 0;
@@ -1579,47 +1576,6 @@ mod ffi {
             }
         }
         out
-    }
-
-    /// WinSock must be started before `getnameinfo`; once per process is enough
-    /// and there is nothing to clean up before exit.
-    fn winsock() -> bool {
-        use std::sync::OnceLock;
-        static READY: OnceLock<bool> = OnceLock::new();
-        *READY.get_or_init(|| {
-            let mut data: WSADATA = unsafe { std::mem::zeroed() };
-            unsafe { WSAStartup(0x0202, &mut data) == 0 }
-        })
-    }
-
-    /// Reverse DNS for one address. `NI_NAMEREQD` means "a name or nothing",
-    /// so the IP is never echoed back as its own host name.
-    pub fn host_name(ip: Ipv4Addr) -> Option<String> {
-        if !winsock() {
-            return None;
-        }
-        let mut sa: SOCKADDR_IN = unsafe { std::mem::zeroed() };
-        sa.sin_family = AF_INET;
-        // Network byte order, the same way `Pinger` hands an address over.
-        sa.sin_addr.S_un.S_addr = u32::from_ne_bytes(ip.octets());
-        let mut host = [0u8; 256];
-        let code = unsafe {
-            getnameinfo(
-                std::ptr::from_ref(&sa).cast::<SOCKADDR>(),
-                std::mem::size_of::<SOCKADDR_IN>() as i32,
-                host.as_mut_ptr(),
-                host.len() as u32,
-                std::ptr::null_mut(),
-                0,
-                NI_NAMEREQD as i32,
-            )
-        };
-        if code != 0 {
-            return None;
-        }
-        let end = host.iter().position(|&b| b == 0).unwrap_or(host.len());
-        let name = String::from_utf8_lossy(&host[..end]).into_owned();
-        (!name.is_empty()).then_some(name)
     }
 }
 
