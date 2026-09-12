@@ -80,6 +80,11 @@ pub fn alarm_sequence() -> Vec<Box<dyn Source + Send>> {
     ]
 }
 
+/// Geiger-kitörés: 1,5 s sűrű, véletlen kattogás (DOSIMETER túladagolás).
+pub fn geiger_burst() -> Vec<Box<dyn Source + Send>> {
+    vec![Box::new(Clicks::new(18.0, 40.0, Duration::from_millis(1500)))]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

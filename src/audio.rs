@@ -15,6 +15,7 @@ use std::time::Duration;
 
 enum AudioCmd {
     Alarm,
+    Geiger,
     Stop,
     Volume(f32),
 }
@@ -56,6 +57,13 @@ impl Audio {
                         }
                         alarm.play();
                     }
+                    AudioCmd::Geiger => {
+                        alarm.clear();
+                        for s in crate::sfx::geiger_burst() {
+                            alarm.append(s);
+                        }
+                        alarm.play();
+                    }
                     AudioCmd::Stop => alarm.clear(),
                     AudioCmd::Volume(v) => alarm.set_volume(v),
                 }
@@ -87,6 +95,11 @@ impl Audio {
     /// Play the timer alarm (five repetitions of the synthesized sequence).
     pub fn alarm(&self) {
         self.send(AudioCmd::Alarm);
+    }
+
+    /// Play a short Geiger crackle burst (DOSIMETER over-exposure).
+    pub fn geiger(&self) {
+        self.send(AudioCmd::Geiger);
     }
 
     /// Stop the alarm.

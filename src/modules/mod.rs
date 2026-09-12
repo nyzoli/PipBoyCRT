@@ -2,6 +2,7 @@
 //! Lásd `docs/adding-a-module.md`.
 pub mod art;
 pub mod clock;
+pub mod dosimeter;
 pub mod globe;
 pub mod mail;
 pub mod music;

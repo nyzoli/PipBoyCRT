@@ -236,3 +236,16 @@ levels = "warn"     # "error" = critical + error only, "warn" = with warnings
 interval = 60
 sweep = true
 subnet = ""         # e.g. "192.168.100.0/24"; empty = the gateway's /24
+
+# Screen time as a radiation dose: after `work` minutes on the keyboard the dose
+# is critical and a `rest`-minute break is prescribed. A gap of `idle` minutes
+# (or a locked workstation) closes the session; sessions and completed breaks
+# are appended to dosimeter.log next to the executable.
+[dosimeter]
+work = 45
+rest = 15
+idle = 3
+quiet = ["22:00-07:00"]   # no Geiger burst inside these windows
+watch_foreground = false  # per-app minutes today (memory only, never logged)
+rest_apps = ["vlc", "mpv"]  # foreground apps that count as rest even with input
+history = 30              # days of log kept for the 7-day sparkline
