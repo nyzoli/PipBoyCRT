@@ -43,7 +43,7 @@ rather than operated.
 | **SYSLOG** | The last 24 hours of Windows event-log errors and warnings, with details |
 | **ART** | A holotape gallery: ANSI art from the 16colo.rs archive and ascii.live animations |
 | **QUEST** | A gamebook on a holotape: the Lone Wolf books by Joe Dever, downloaded from [Project Aon](https://www.projectaon.org) for your own personal use (no book text ships with the app), or your own gamebooks in a small plain-text format — Action Chart, Random Number Table and the official combat system included |
-| **GLOBE** | A braille world map with the day/night terminator, your location, the subsolar point and the live ISS |
+| **GLOBE** | A braille world map with the day/night terminator, your location, the subsolar point, the live ISS — and an arc to every country your open connections go to. Where your connections go: WASTELAND's CONN view hands GLOBE the public remote addresses, their country comes from [geojs.io](https://www.geojs.io) (HTTPS, no key, cached for 30 days in `geo.json`), and each country gets one arc from home, bright while a connection is established, the busiest with a dot travelling along it. Only the remote addresses of your open connections leave the machine for this, nothing else; `c` hides the arcs and pauses the lookups, `[globe] arcs = false` switches the feature off entirely |
 | **TERM** | A real terminal inside the Pip-Boy (`pwsh` by default) — run `claude` in it with the shipped Vault-Tec persona |
 | **SETUP** | Switch modules on and off, with a line about each; disabled ones never start |
 
@@ -262,6 +262,7 @@ rustflags = ["-C", "linker-flavor=ld.lld", "-C", "link-self-contained=yes"]
 | `i` | GLOBE: show/hide the ISS trail (its last 30 positions) |
 | `n` | GLOBE: show/hide the night shading and the terminator |
 | `r` | GLOBE: fetch the ISS position now |
+| `c` | GLOBE: hide/show the connection arcs and pause the country lookups for this session (`[globe] arcs = false` switches the feature off entirely) |
 | `0` | jump to the SETUP tab (always the last one) |
 | `↑` `↓` | SETUP: select module |
 | `Space` `Enter` | SETUP: switch the selected module on/off (saved right away) |
@@ -746,7 +747,11 @@ limit = 30        # items kept per source
 [notes]
 file = "notes.md" # relative paths resolve next to the executable
 
-# GLOBE has no section of its own: the ⌂ marker stands on [weather]'s lat/lon.
+# GLOBE: the ⌂ marker stands on [weather]'s lat/lon. With arcs on, the remote
+# IPs of your open connections are sent to geojs.io (country lookup, cached in
+# geo.json) and nothing else; arcs = false switches that off entirely.
+[globe]
+arcs = true
 
 [mail]
 command = "himalaya"  # the Himalaya CLI, looked up on the PATH (or an absolute path)

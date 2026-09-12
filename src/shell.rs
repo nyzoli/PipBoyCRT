@@ -246,6 +246,13 @@ impl Shell {
             return false;
         }
         self.notice = None;
+        // Ctrl+C quits from every tab, whatever plain `c` means there — unless
+        // the module has the whole keyboard (TERM attached), when it is the
+        // child's interrupt.
+        let captured = self.tab > 0 && self.tab != self.setup_tab() && self.modules[self.tab - 1].captures_keyboard();
+        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) && !captured {
+            return true;
+        }
         if self.tab == self.setup_tab() {
             if self.setup_key(key) {
                 return false;
@@ -748,12 +755,14 @@ mod tests {
         eats: Option<KeyCode>,
         /// Ezt globálisan fogyasztja el.
         eats_global: Option<KeyCode>,
+        /// `captures_keyboard()` — a TERM-féle "minden billentyű az enyém".
+        captures: bool,
         log: Arc<Mutex<Log>>,
     }
 
     impl Fake {
         fn new(id: &'static str, title: &'static str, log: Arc<Mutex<Log>>) -> Self {
-            Self { id, title, eats: None, eats_global: None, log }
+            Self { id, title, eats: None, eats_global: None, captures: false, log }
         }
     }
 
@@ -782,7 +791,10 @@ mod tests {
         }
         fn on_key(&mut self, key: KeyEvent, _ctx: &Ctx) -> bool {
             self.log.lock().unwrap().local.push(key.code);
-            Some(key.code) == self.eats
+            Some(key.code) == self.eats || self.captures
+        }
+        fn captures_keyboard(&self) -> bool {
+            self.captures
         }
         fn on_global_key(&mut self, key: KeyEvent, _ctx: &Ctx) -> bool {
             self.log.lock().unwrap().global.push(key.code);
@@ -849,6 +861,36 @@ mod tests {
         assert!(s.on_key(key(KeyCode::Char('q'))));
         assert!(!s.on_key(key(KeyCode::Esc)), "Esc is free for modules, never quits");
         assert!(s.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)));
+    }
+
+    #[test]
+    fn ctrl_c_quits_even_where_plain_c_is_a_module_key() {
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        // The real GLOBE: `c` toggles its arcs, Ctrl+C must still quit.
+        let (mut s, _n) = shell(vec![Box::new(crate::modules::globe::Globe::new())]);
+        s.tab = 1;
+        assert!(s.on_key(ctrl_c), "Ctrl+C on GLOBE quits");
+        assert!(!s.on_key(key(KeyCode::Char('c'))), "plain c is GLOBE's");
+
+        // A module eating `c` never sees the Ctrl variant either.
+        let log = Arc::new(Mutex::new(Log::default()));
+        let mut eater = Fake::new("a", "A", log.clone());
+        eater.eats = Some(KeyCode::Char('c'));
+        let (mut s, _n) = shell(vec![Box::new(eater)]);
+        s.tab = 1;
+        assert!(s.on_key(ctrl_c));
+        assert!(log.lock().unwrap().local.is_empty(), "the module was not asked");
+
+        // But a module that has the keyboard (TERM attached) gets it.
+        let log = Arc::new(Mutex::new(Log::default()));
+        let mut term = Fake::new("t", "T", log.clone());
+        term.captures = true;
+        let (mut s, _n) = shell(vec![Box::new(term)]);
+        s.tab = 1;
+        assert!(!s.on_key(ctrl_c), "captured: the child's interrupt, not a quit");
+        assert_eq!(log.lock().unwrap().local, vec![KeyCode::Char('c')]);
+        s.tab = 0;
+        assert!(s.on_key(ctrl_c), "on OVERVIEW the capture does not apply");
     }
 
     #[test]

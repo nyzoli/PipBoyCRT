@@ -597,6 +597,10 @@ key that means the same thing on every keyboard layout."
         n
     }
 
+    fn captures_keyboard(&self) -> bool {
+        self.captured
+    }
+
     fn on_key(&mut self, key: KeyEvent, ctx: &Ctx) -> bool {
         if self.captured {
             if self.release.is_some_and(|spec| matches_spec(key, spec)) {

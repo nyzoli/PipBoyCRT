@@ -168,6 +168,16 @@ zones = ["America/New_York", "Asia/Tokyo"]
 timer_minutes = 25
 view = "normal"   # starting view: "normal" / "digital" / "analog" (`v` cycles them)
 
+# GLOBE: the ⌂ marker stands on [weather]'s lat/lon. arcs draws a curve from
+# there to every country this machine has an open connection to (WASTELAND's
+# CONN view is the source). For that the public remote IPs of your open
+# connections are sent to geojs.io over HTTPS, which answers with a country
+# only; answers are cached in geo.json next to the executable for 30 days.
+# Nothing else leaves the machine for this. `c` hides the arcs and pauses the
+# lookups for a session; arcs = false switches the feature off entirely.
+[globe]
+arcs = true
+
 # RSS/Atom feed URLs next to the built-in Hacker News front page; limit = items per source
 [news]
 feeds = [
