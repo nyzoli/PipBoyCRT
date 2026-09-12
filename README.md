@@ -247,15 +247,15 @@ rustflags = ["-C", "linker-flavor=ld.lld", "-C", "link-self-contained=yes"]
 | `Enter` | QUEST · library: open the selected book (downloaded books and your own `.txt` ones) |
 | `d` | QUEST · library: download the selected Lone Wolf book from projectaon.org into `vault\quests\lw\<code>\` |
 | `r` | QUEST · library: rescan the quest folder |
-| `1`–`9` | QUEST · play: take that numbered choice — **the play view keeps the digits**, they do not switch tabs there (`0` still goes to SETUP) |
+| `1`–`9` | QUEST · play: take that numbered choice — **the play view keeps the digits**, they do not switch tabs there (`0` still goes to SETUP). Dimmed and ignored while the `▶` line asks for a fight or a number |
 | `↑` `↓` `Enter` | QUEST · play: highlight a choice and take it (`PgUp` `PgDn` scroll the section text) |
 | `b` | QUEST · play: step back one section (history, last 50) |
-| `n` | QUEST · play: new game — rolls COMBAT SKILL and ENDURANCE, then the Kai Discipline picker |
-| `r` | QUEST · play: pick from the Random Number Table (a big spinning digit) |
+| `n` | QUEST · play: new game — the `HOW THIS WORKS` panel, then COMBAT SKILL and ENDURANCE are rolled, then the Kai Discipline picker |
+| `r` | QUEST · play: pick from the Random Number Table (a big spinning digit under its caption; the landed number says what it means) |
 | `c` | QUEST · play: open the combat panel when the section has a fight (`Enter`/`r` a round, `e` evade, `Esc` close) |
-| `a` | QUEST · play: show/hide the Action Chart (shown by itself from 100 columns) |
-| `Tab` `+` `-` | QUEST · play: select an Action Chart field / raise / lower it |
-| `i` `x` | QUEST · play: write into the selected item slot (`ITEM>` prompt) / clear it |
+| `a` | QUEST · play: show/hide the ACTION CHART (shown by itself from 100 columns; `Esc` closes it before it leaves the book) |
+| `Tab` `+` `-` | QUEST · play: move the `▶` marker to the next chart field / raise / lower it |
+| `i` `x` `x` | QUEST · play: write into the selected item slot (`ITEM>` prompt) / remove it, the second `x` confirms |
 | `l` | QUEST · play: reload the last save (every move autosaves anyway) |
 | `m` `?` | QUEST · play: the map page / the rules page (`Esc` back) |
 | `Esc` `Backspace` | QUEST · play: back to the library |
@@ -462,31 +462,49 @@ Five books are known out of the box (`01fftd` *Flight from the Dark*, `02fotw`
 Doom* — 350 sections each — and `05sots` *Shadow on the Sand*, 400). More can be
 added in `config.toml` without a rebuild, see [Config](#config).
 
+### How a session goes
+
+This is a paper gamebook on a holotape: **the book tells you what happens, you
+keep the Action Chart yourself** — the Pip-Boy only rolls the dice, does the
+combat maths and remembers where you are. A new game says so up front, in a
+short `HOW THIS WORKS` panel. From there: `Enter` opens a book, `n` starts a new
+game, you read the section, and the highlighted **`▶` line** under the text says
+what to do *now* — `▶ Fight: press c to open combat (Rad Roach · CS 9 · END
+12)`, `▶ Pick a number: press r`, `▶ Choose 1–3 below`, `▶ You picked 7 — now
+choose below`, `▶ Combat won — choose below`, `▶ Endurance 0 — you died…`. Until
+an owed fight or roll is done the choices stay dim and the digit keys do
+nothing, so a combat cannot be skipped by accident. When the text tells you to
+write something down, you write it: `a`, `Tab`, `+`/`-`, `i`, `x`.
+
 ### Playing
 
-`Enter` opens a book. The section number is the header (`SECTION 141`), the text
-wraps and scrolls, and the choices are listed `1) … 2) …` — press the digit, or
-walk them with `↑` `↓` and press `Enter`. `b` steps back through the last 50
-sections. Every move autosaves to `vault\quests\save.json` (one entry per book,
-written through a temp file and renamed, so a half-written save can never be
-read back); `l` reloads it.
+The section number is the header (`SECTION 141`), the text wraps and scrolls,
+and the choices are listed `1) … 2) …` — press the digit, or walk them with `↑`
+`↓` and press `Enter`. `b` steps back through the last 50 sections. Every move
+autosaves to `vault\quests\save.json` (one entry per book, written through a
+temp file and renamed, so a half-written save can never be read back); `l`
+reloads it.
 
 `n` starts a new game: COMBAT SKILL is 10 + a Random Number Table pick,
 ENDURANCE is 20 + a pick, exactly as the book's rules say — then you choose five
 of the ten **Kai Disciplines** (the list is read from the downloaded rules page,
-not shipped). The **Action Chart** sits in its own column from 100 columns wide,
-and `a` toggles it on a narrower terminal: COMBAT SKILL, ENDURANCE, Gold Crowns,
-Meals, two weapon slots, eight Backpack slots, Special Items and your
-Disciplines. `Tab` walks the fields, `+` `-` change a number, `i` writes into the
-selected slot and `x` clears it.
+not shipped). The **ACTION CHART** sits in its own column from 100 columns wide,
+and `a` toggles it on a narrower terminal: `STATS` (COMBAT SKILL, ENDURANCE,
+GOLD, MEALS), `WEAPONS`, `BACKPACK 3/8`, `SPECIAL ITEMS`, `KAI DISCIPLINES`.
+`▶` marks the field `Tab` is on, and that row carries its own hint; `+` `-`
+change a number, `i` opens an `ITEM>` prompt for the selected slot, `x` `x`
+removes what is in it.
 
 `r` is the **Random Number Table**: a big block-font digit that spins for 0.6 s
-and lands on 0–9 (only that spin asks the shell for 20 fps). `c` opens the
-**combat panel** when the section names an enemy. Combat Ratio is your COMBAT
-SKILL minus the enemy's (+2 if you took **Mindblast**); each round picks a number
-and reads the official Combat Results Table, applying the ENDURANCE losses to
-both sides until one of them reaches 0. `e` evades when the section's own text
-allows it. The panel keeps a round-by-round log.
+under that caption and lands on 0–9 (only that spin asks the shell for 20 fps),
+then says what it meant — `you picked 7 → turn to 88` when a choice names that
+number. That choice is pre-selected for you; you still press it. `c` opens the
+**combat panel** when the section names an enemy: both fighters with an
+ENDURANCE bar, the Combat Ratio (your COMBAT SKILL, `+2 (Mindblast)` if you took
+it, minus the enemy's), a round log reading `pick 5 · you −3 (END 19) · enemy −6
+(END 6)`, and a bottom line `enter fight a round · e evade (allowed here) · esc
+close`. Each round reads the official Combat Results Table until one side
+reaches 0, then shows a banner and hands the section's choices back.
 
 The Combat Results Table itself is embedded in the app as a constant: it is a
 rules mechanic rather than book text. It was transcribed from `crtneg.png` and
@@ -534,9 +552,14 @@ THE END
 * `!combat Giak 12 14` — an enemy with COMBAT SKILL 12 and ENDURANCE 14.
 
 Everything else is just text, so a book with no choices at all still reads
-fine. A small original example ships in
-[`vault/quests/vault-13.txt`](vault/quests/vault-13.txt) — nine sections of
-Vault-Tec paperwork, one rad roach.
+fine. A choice sentence that names Random Number Table picks (`0–4`, `5-9`,
+`0, 1 or 2`, `1 to 3`) is matched against the landed die and pre-selected.
+
+An original example ships in
+[`vault/quests/vault-13.txt`](vault/quests/vault-13.txt): 40 sections of
+Vault-Tec paperwork, four fights, four random-number branches, two places where
+what is on your chart decides the way, and three endings — one good, one bad,
+one promotion.
 
 ## MAIL and the Himalaya CLI
 

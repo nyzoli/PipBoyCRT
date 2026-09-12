@@ -1297,6 +1297,7 @@ mod tests {
             Box::new(crate::modules::art::Art::new()),
             Box::new(crate::modules::globe::Globe::new()),
             Box::new(crate::modules::term::Term::new()),
+            Box::new(crate::modules::quest::Quest::new()),
         ];
         let check = |title: &str, text: &str| {
             assert!(!text.trim().is_empty(), "{title}: üres kézikönyv");
