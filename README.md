@@ -34,7 +34,7 @@ rather than operated.
 | **MUSIC** | Your own music folder as a browser (mp3, aac/m4a, flac, wav), shuffle, VU; it and RADIO pause each other |
 | **NET** | Ping to the gateway and public resolvers with sparklines and loss, traceroute, a Cloudflare down/up SPEEDTEST with history |
 | **WIFI** | Networks in range with band, channel, dBm; channel congestion as bell curves; best channel per band; connect with a password prompt |
-| **WASTELAND** | Every device on your local network: who is home, who is asleep, who is new — name, vendor, MAC, last seen, with an optional ping sweep — and, with `v`, the connections your machine has open, by process, with remote names and traffic |
+| **WASTELAND** | Every device on your local network: who is home, who is asleep, who is new — name, vendor, MAC, last seen, with an optional ping sweep — and, with `v`, the connections your machine has open, by process, with remote names, the cloud behind them and traffic |
 | **CLOCK** | Big clock, world clocks, sun & moon, a quest timer that ends in a radiation alarm; `v` cycles a full-screen shadowed digital clock and a full-panel analog dial with a day/date window |
 | **DOSIMETER** | Screen time as a radiation dose: a RADS readout in block font, a 24-hour strip of the day, and a 45-on / 15-off rule that alerts with a Geiger burst when the dose goes critical |
 | **NEWS** | Hacker News front page plus your RSS/Atom feeds, with a reader view and on-demand article fetch |

@@ -27,7 +27,7 @@ use serde::Deserialize;
 use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -273,6 +273,82 @@ fn scope(ip: IpAddr) -> &'static str {
     } else {
         "public"
     }
+}
+
+/// Reverse-DNS suffix → who runs the box. Only names people misread:
+/// `googleusercontent.com` is a Google Cloud customer, not Google.
+const CLOUD_SUFFIXES: &[(&str, &str)] = &[
+    ("googleusercontent.com", "Google Cloud"),
+    ("1e100.net", "Google"),
+    ("amazonaws.com", "AWS"),
+    ("cloudfront.net", "AWS CloudFront"),
+    ("awsglobalaccelerator.com", "AWS"),
+    ("cloudapp.net", "Azure"),
+    ("cloudapp.azure.com", "Azure"),
+    ("azurefd.net", "Azure"),
+    ("trafficmanager.net", "Azure"),
+    ("msedge.net", "Microsoft"),
+    ("akamaitechnologies.com", "Akamai"),
+    ("akamaiedge.net", "Akamai"),
+    ("fastly.net", "Fastly"),
+    ("cloudflare.com", "Cloudflare"),
+    ("hetzner.com", "Hetzner"),
+    ("hetzner.de", "Hetzner"),
+    ("digitalocean.com", "DigitalOcean"),
+    ("linode.com", "Linode"),
+    ("linodeusercontent.com", "Linode"),
+    ("ovh.net", "OVH"),
+    ("vultrusercontent.com", "Vultr"),
+    ("scaleway.com", "Scaleway"),
+    ("oraclecloud.com", "Oracle Cloud"),
+];
+
+/// IPv4 blocks that answer without a reverse name. ponytail: a handful of
+/// well-known ranges, not the providers' JSON feeds; extend when one bites.
+const CLOUD_V4: &[([u8; 4], u8, &str)] = &[
+    ([1, 1, 1, 0], 24, "Cloudflare"),
+    ([1, 0, 0, 0], 24, "Cloudflare"),
+    ([104, 16, 0, 0], 12, "Cloudflare"),
+    ([172, 64, 0, 0], 13, "Cloudflare"),
+    ([162, 158, 0, 0], 15, "Cloudflare"),
+    ([188, 114, 96, 0], 20, "Cloudflare"),
+    ([8, 8, 8, 0], 24, "Google"),
+    ([8, 8, 4, 0], 24, "Google"),
+    ([34, 64, 0, 0], 10, "Google Cloud"),
+    ([35, 184, 0, 0], 13, "Google Cloud"),
+    ([9, 9, 9, 0], 24, "Quad9"),
+    ([17, 0, 0, 0], 8, "Apple"),
+    ([13, 107, 0, 0], 16, "Microsoft"),
+    ([20, 190, 128, 0], 18, "Microsoft"),
+    ([52, 96, 0, 0], 12, "Microsoft 365"),
+    ([151, 101, 0, 0], 16, "Fastly"),
+    ([199, 232, 0, 0], 16, "Fastly"),
+];
+
+/// Who runs the remote box, from its reverse name first, then a few
+/// well-known address blocks. `None` for LAN, loopback and the unknown.
+fn cloud(name: Option<&str>, ip: IpAddr) -> Option<&'static str> {
+    if is_private(ip) || is_loopback(ip) {
+        return None;
+    }
+    if let Some(n) = name {
+        let n = n.to_ascii_lowercase();
+        let hit = CLOUD_SUFFIXES
+            .iter()
+            .find(|(suf, _)| n == *suf || n.ends_with(&format!(".{suf}")));
+        if let Some((_, who)) = hit {
+            return Some(who);
+        }
+    }
+    let IpAddr::V4(v4) = ip else { return None };
+    let bits = u32::from(v4);
+    CLOUD_V4
+        .iter()
+        .find(|(net, len, _)| {
+            let mask = if *len == 0 { 0 } else { u32::MAX << (32 - len) };
+            bits & mask == u32::from(Ipv4Addr::from(*net)) & mask
+        })
+        .map(|(_, _, who)| *who)
 }
 
 /// Rate from two counter samples. `None` for the first sample of a connection
@@ -1045,7 +1121,10 @@ impl ConnView {
             Line::from(Span::styled(truncate(&format!("{} {}", c.process, c.remote), w), t.title)),
             Line::from(Span::styled(format!("remote  {}", c.remote), t.value)),
             Line::from(truncate(&format!("name    {}", c.name.as_deref().unwrap_or("\u{2014}")), w)),
-            Line::from(format!("where   {}", scope(c.remote.ip()))),
+            Line::from(match cloud(c.name.as_deref(), c.remote.ip()) {
+                Some(who) => format!("where   {} · {who}", scope(c.remote.ip())),
+                None => format!("where   {}", scope(c.remote.ip())),
+            }),
             Line::from(format!("port    {}", port_label(c.remote.port()))),
             Line::from(format!("local   {}", c.local)),
             Line::from(format!("proto   {proto}")),
@@ -1551,6 +1630,19 @@ mod tests {
         assert_eq!(scope(ip("10.0.0.4")), "LAN");
         assert_eq!(scope(ip("1.1.1.1")), "public");
         assert_eq!(scope(ip("127.0.0.1")), "local");
+    }
+
+    #[test]
+    fn cloud_is_read_from_the_name_then_the_block() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        assert_eq!(cloud(Some("163.66.149.34.bc.googleusercontent.com"), ip("34.149.66.163")), Some("Google Cloud"));
+        assert_eq!(cloud(Some("ec2-3-4-5-6.compute-1.amazonaws.com"), ip("3.4.5.6")), Some("AWS"));
+        assert_eq!(cloud(Some("notamazonaws.com"), ip("3.4.5.6")), None, "suffix must sit on a label boundary");
+        assert_eq!(cloud(None, ip("1.1.1.1")), Some("Cloudflare"));
+        assert_eq!(cloud(None, ip("104.31.7.7")), Some("Cloudflare"));
+        assert_eq!(cloud(None, ip("17.253.1.1")), Some("Apple"));
+        assert_eq!(cloud(None, ip("93.184.216.34")), None);
+        assert_eq!(cloud(Some("nas.googleusercontent.com"), ip("192.168.1.2")), None, "LAN is never a cloud");
     }
 
     #[test]
