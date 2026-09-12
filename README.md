@@ -14,7 +14,7 @@ rather than operated.
   so it works in any terminal, and it looks the part inside
   [cool-retro-term-windows](https://github.com/pushingpandas/cool-retro-term-windows),
   which supplies the CRT glow (see [Getting started](#getting-started)).
-- **What it gives you** — seventeen tabs (below), an OVERVIEW that composes the
+- **What it gives you** — eighteen tabs (below), an OVERVIEW that composes the
   important bits of all of them, a header with the battery, the playing station
   and the unread count, and a SETUP tab to switch off what you don't need.
 - **What it is for** — a second monitor, an old laptop on the shelf, the
@@ -174,7 +174,7 @@ rustflags = ["-C", "linker-flavor=ld.lld", "-C", "link-self-contained=yes"]
 |---|---|
 | `h` | the manual of the current tab, in a popup — what it does and what every key does (`↑` `↓` scroll it, any other key closes it; TERM while attached and the NOTES editor keep the key) |
 | `←` `→` `Tab` `Shift+Tab` | switch tab |
-| `1`–`9` | jump to OVERVIEW / STAT / WEATHER / RADIO / MUSIC / NET / WIFI / WASTELAND / CLOCK (DOSIMETER, NEWS, MAIL, NOTES, SYSLOG, ART, GLOBE and TERM follow: `←` `→`) |
+| `1`–`9` | jump to OVERVIEW / STAT / WEATHER / RADIO / MUSIC / NET / WIFI / WASTELAND / CLOCK (DOSIMETER, NEWS, MAIL, NOTES, SYSLOG, ART, QUEST, GLOBE and TERM follow: `←` `→`) |
 | `↑` `↓` `Enter` | RADIO: select / tune station |
 | `*` | RADIO: save the playing track (artist – title) into the `Favorite tracks` note in `notes.md` |
 | `Space` | play / pause (from any tab) |
