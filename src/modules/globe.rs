@@ -17,7 +17,7 @@ use crate::module::{ConnSnapshot, Ctx, Module, Notice, RemoteConn, Slot, CONNECT
 use crate::style::Theme;
 use crate::ui::countries;
 use crate::ui::landmask;
-use crate::ui::widgets::truncate;
+use crate::ui::widgets::{bytes, truncate};
 use chrono::{Datelike, Timelike, Utc};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -25,7 +25,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::canvas::{Canvas, Line as CLine, Points};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
@@ -377,6 +377,8 @@ pub struct Globe {
     show_night: bool,
     /// `c`: the arc layer for this session (only meaningful with `cfg.arcs`).
     show_arcs: bool,
+    /// `l`: the country table in the map's bottom-right corner.
+    show_list: bool,
     /// Land dots split into day and night for the last canvas size and
     /// minute; the sun moves a quarter degree a minute, the split is ~11k
     /// elevations, so neither is redone per frame.
@@ -417,6 +419,7 @@ impl Globe {
             show_trail: true,
             show_night: true,
             show_arcs: true,
+            show_list: true,
             dots: RefCell::new(((0, 0, 0), Vec::new(), Vec::new())),
             drawn: Cell::new(false),
             rx: None,
@@ -569,6 +572,34 @@ fn fg(s: Style) -> Color {
     s.fg.unwrap_or(Color::Reset)
 }
 
+impl Globe {
+    /// The country table, bottom-right, busiest first: `US·3 United States 12 KB/s`.
+    fn draw_list(&self, f: &mut Frame, map: Rect, t: Theme) {
+        if map.width < 60 || map.height < 6 {
+            return;
+        }
+        let mut arcs: Vec<&ArcInfo> = self.arcs.iter().collect();
+        arcs.sort_by(|a, b| b.rate.cmp(&a.rate).then_with(|| a.code.cmp(&b.code)));
+        let inner_w = (map.width / 2).saturating_sub(2) as usize;
+        let rows = (map.height as usize / 2).saturating_sub(2).max(1).min(arcs.len());
+        let lines: Vec<Line<'static>> = arcs
+            .iter()
+            .take(rows)
+            .map(|a| {
+                let head = if a.count > 1 { format!("{}·{}", a.code, a.count) } else { a.code.clone() };
+                let s = truncate(&format!("{head:<5} {} {}/s", a.name, bytes(a.rate)), inner_w);
+                Line::from(Span::styled(s, if a.established { t.text } else { t.frame }))
+            })
+            .collect();
+        let w = lines.iter().map(|l| l.width()).max().unwrap_or(0) as u16 + 2;
+        let h = lines.len() as u16 + 2;
+        let area = Rect::new(map.right() - w, map.bottom() - h, w, h);
+        f.render_widget(Clear, area);
+        let block = Block::default().borders(Borders::ALL).border_style(t.frame).title(Span::styled(" LINKS ", t.title));
+        f.render_widget(Paragraph::new(lines).block(block), area);
+    }
+}
+
 impl Module for Globe {
     fn id(&self) -> &'static str {
         "globe"
@@ -590,6 +621,7 @@ and an arc to every country this machine has a connection to.
   i     show or hide the ISS trail, its last 30 positions
   n     show or hide the night shading and the terminator
   c     show or hide the connection arcs
+  l     show or hide the LINKS table (countries, busiest first)
   r     fetch the ISS position now
   1-9   jump to a tab
 
@@ -597,7 +629,8 @@ The arcs come from WASTELAND's connection table: the public
 remote addresses are sent to geojs.io over HTTPS, which answers
 with a country and nothing more; answers are kept in geo.json
 next to the executable for 30 days. Nothing else leaves the
-machine for this. Bright arcs are established, dim ones closing;
+machine for this. Arcs are red: bright ones are established, dim
+ones closing;
 the busiest carries a travelling dot. c hides the arcs and
 pauses the lookups; [globe] arcs = false switches the feature
 off entirely.
@@ -626,7 +659,7 @@ is permitted; being seen back is not part of the contract."
     }
     fn help(&self) -> &'static str {
         if self.cfg.arcs {
-            "i ISS trail   n night   c arcs   r refresh ISS   1-9 tabs   q quit"
+            "i ISS trail   n night   c arcs   l links   r refresh ISS   1-9 tabs   q quit"
         } else {
             "i ISS trail   n night shading   r refresh ISS   1-9 tabs   q quit"
         }
@@ -724,6 +757,10 @@ is permitted; being seen back is not part of the contract."
                 }
                 true
             }
+            KeyCode::Char('l') if self.cfg.arcs => {
+                self.show_list = !self.show_list;
+                true
+            }
             KeyCode::Char('r') => {
                 if let Some(tx) = &self.tx_refresh {
                     let _ = tx.try_send(());
@@ -776,6 +813,8 @@ is permitted; being seen back is not part of the contract."
         };
 
         let (lit, dim, hi) = (fg(t.value), fg(t.frame), fg(t.title));
+        // Arcs are red like everything hostile on a Pip-Boy; mono keeps its two greys.
+        let (arc_hot, arc_cold) = if fg(t.danger) == Color::Reset { (lit, dim) } else { (Color::LightRed, Color::Red) };
         let (home, iss, trail) = (self.home.clone(), self.iss, self.trail.clone());
         let show_trail = self.show_trail;
         let name_fits = map.width >= 60;
@@ -800,7 +839,7 @@ is permitted; being seen back is not part of the contract."
                 // Dim arcs first so an established one is never painted over.
                 let (closing, open): (Vec<&ArcInfo>, Vec<&ArcInfo>) = arcs.iter().partition(|a| !a.established);
                 for a in closing.into_iter().chain(open) {
-                    let color = if a.established { lit } else { dim };
+                    let color = if a.established { arc_hot } else { arc_cold };
                     let pts = arc_points(from, a.to, ARC_SEGMENTS);
                     // Past ±180 the arc continues on the other edge of the map.
                     let wraps = pts.iter().any(|p| !(-180.0..=180.0).contains(&p.0));
@@ -833,6 +872,9 @@ is permitted; being seen back is not part of the contract."
                 }
             });
         f.render_widget(canvas, map);
+        if self.show_list && !self.arcs.is_empty() && self.arcs_on() {
+            self.draw_list(f, map, t);
+        }
     }
 
     fn overview(&self, _w: u16, _h: u16, t: Theme) -> Vec<Line<'static>> {
@@ -1279,6 +1321,11 @@ mod tests {
         assert!(text.contains("3 links / 2 countries"), "{text}");
         assert!(text.contains("United States") && text.contains("Japan"), "labels at 120 columns");
         assert!(text.contains('●'), "the travelling dot");
+        assert!(text.contains(" LINKS ") && text.contains("/s"), "the country table: {text}");
+        g.show_list = false;
+        assert!(!screen(&g, 120, 40).contains(" LINKS "), "l hides the table");
+        g.show_list = true;
+        assert!(!screen(&g, 59, 12).contains(" LINKS "), "no table under 60 columns");
         assert!(g.wants_fast_frames(true), "the tab was drawn with a moving dot");
         g.overview(30, 2, t);
         assert!(!g.wants_fast_frames(true), "OVERVIEW never earns fast frames");
