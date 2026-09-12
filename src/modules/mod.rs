@@ -9,6 +9,10 @@ pub mod music;
 pub mod net;
 pub mod news;
 pub mod notes;
+/// Registered by the coordinator (one line in the `main.rs` registry, after ART);
+/// until then nothing constructs it, so the whole module reads as dead code.
+#[allow(dead_code)]
+pub mod quest;
 pub mod radio;
 pub mod stat;
 pub mod syslog;
